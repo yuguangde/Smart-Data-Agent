@@ -1,0 +1,15 @@
+[project]
+name = "smart-data-agent-backend"
+version = "0.1.0"
+description = "LangGraph-based chatbot backend with FastAPI, tool calling, memory, streaming and WebSocket."
+readme = "README.md"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-ra -q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

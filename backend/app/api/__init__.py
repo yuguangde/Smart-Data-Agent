@@ -1,0 +1,11 @@
+"""FastAPI route collection."""
+from fastapi import APIRouter
+
+from app.api.chat import router as chat_router
+from app.api.ws import router as ws_router
+
+api_router = APIRouter()
+api_router.include_router(chat_router)
+api_router.include_router(ws_router)
+
+__all__ = ["api_router"]
