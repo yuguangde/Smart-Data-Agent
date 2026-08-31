@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.agent.graph import get_compiled_graph
-from app.api.router import api_router
+from app.api import api_router
 from app.config import get_settings
 from app.memory.checkpointer import shutdown_checkpointer
 
