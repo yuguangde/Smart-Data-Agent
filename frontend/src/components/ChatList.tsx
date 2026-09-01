@@ -14,9 +14,11 @@ import {
 import { Bubble } from "@ant-design/x";
 import { Avatar, Card, Empty, Space, Tag, Typography } from "antd";
 import { useEffect, useRef } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { ChatMessage, ToolCall } from "@/types/chat";
 
-const { Text, Paragraph } = Typography;
+const { Text } = Typography;
 
 interface Props {
   messages: ChatMessage[];
@@ -95,13 +97,13 @@ function MessageBubble({
 }) {
   return (
     <div className="bubble-body">
-      <Paragraph
-        copyable={!message.streaming}
+      <div
+        className="markdown-body"
         style={{ marginBottom: message.toolCalls?.length ? 8 : 0 }}
       >
-        {content}
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
         {message.streaming ? <span className="caret" /> : null}
-      </Paragraph>
+      </div>
 
       {message.toolCalls && message.toolCalls.length > 0 ? (
         <Space direction="vertical" style={{ width: "100%" }} size={6}>
