@@ -11,10 +11,10 @@ from fastapi.responses import StreamingResponse
 
 from app.agent.graph import get_compiled_graph
 from app.api.schemas import (
-    ChatMessage,
     ChatRequest,
     ChatResponse,
     HealthResponse,
+    MCPServerStatus,
     ThreadCreateResponse,
     ThreadHistory,
 )
@@ -25,6 +25,7 @@ from app.services.agent_service import (
     new_thread_id,
     stream_events,
 )
+from app.tools.mcp_loader import mcp_tools_status
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +35,36 @@ router = APIRouter(tags=["chat"])
 @router.get("/health", response_model=HealthResponse, summary="Liveness/readiness probe")
 async def health() -> HealthResponse:
     settings = get_settings()
+    mcp_payload = mcp_tools_status() or {}
+    mcp_block_required = bool(
+        settings.mcp_enabled and settings.mcp_url
+    )
+    mcp_connected = bool(mcp_payload.get("connected"))
+    overall = (
+        "degraded"
+        if mcp_block_required and not mcp_connected
+        else "ok"
+    )
     return HealthResponse(
-        status="ok",
+        status=overall,
         llm_provider=settings.llm_provider.value,
         checkpointer=settings.checkpointer.value,
         hitl=settings.hitl,
+        mcp=MCPServerStatus(
+            enabled=bool(settings.mcp_enabled),
+            configured=bool(settings.mcp_enabled and settings.mcp_url),
+            connected=mcp_connected,
+            server_name=str(
+                mcp_payload.get("server_name") or settings.mcp_server_name
+            ),
+            url=str(mcp_payload.get("url") or settings.mcp_url),
+            transport=str(
+                mcp_payload.get("transport") or settings.mcp_transport
+            ),
+            tool_count=int(mcp_payload.get("tool_count", 0)),
+            tool_names=list(mcp_payload.get("tool_names", [])),
+            error=mcp_payload.get("error"),
+        ),
     )
 
 

@@ -18,6 +18,7 @@ from app.agent.graph import get_compiled_graph
 from app.api import api_router
 from app.config import get_settings
 from app.memory.checkpointer import shutdown_checkpointer
+from app.tools.mcp_loader import init_mcp_tools, shutdown_mcp
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ def _settings_attr(settings, name: str, default):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Warm the LangGraph at startup; release the checkpointer on shutdown."""
+    """Warm LangGraph + MCP at startup; tear down on shutdown."""
     settings = get_settings()
     logger.info(
         "Starting %s (provider=%s, checkpointer=%s, hitl=%s)",
@@ -38,9 +39,23 @@ async def lifespan(app: FastAPI):
         settings.checkpointer.value,
         settings.hitl,
     )
+
+    # MCP is best-effort: any failure is logged and we fall back to built-in tools.
+    try:
+        tools = await init_mcp_tools()
+        if tools:
+            logger.info("Loaded %d MCP tool(s)", len(tools))
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("MCP initialisation failed during startup: %s", exc)
+
     get_compiled_graph()
-    with shutdown_checkpointer():
+
+    try:
         yield
+    finally:
+        await shutdown_mcp()
+        with shutdown_checkpointer():
+            pass
 
 
 def create_app() -> FastAPI:

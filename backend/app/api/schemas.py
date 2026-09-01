@@ -55,11 +55,26 @@ class ThreadHistory(BaseModel):
     messages: list[ChatMessage]
 
 
+class MCPServerStatus(BaseModel):
+    """Subset of MCP client status surfaced on /health."""
+
+    enabled: bool = Field(default=False)
+    configured: bool = Field(default=False)
+    connected: bool = Field(default=False)
+    server_name: str = Field(default="")
+    url: str = Field(default="")
+    transport: str = Field(default="")
+    tool_count: int = Field(default=0)
+    tool_names: list[str] = Field(default_factory=list)
+    error: str | None = Field(default=None)
+
+
 class HealthResponse(BaseModel):
     status: Literal["ok", "degraded"]
     llm_provider: str
     checkpointer: str
     hitl: bool
+    mcp: MCPServerStatus = Field(default_factory=MCPServerStatus)
 
 
 __all__ = [
