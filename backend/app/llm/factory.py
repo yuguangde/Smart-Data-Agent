@@ -39,6 +39,7 @@ def _build_chat_model(settings: Settings) -> BaseChatModel:
             "api_key": settings.openai_api_key,
             "temperature": settings.openai_temperature,
             "max_tokens": settings.max_tokens,
+            "streaming": True,
         }
         if settings.openai_base_url:
             kwargs["base_url"] = settings.openai_base_url
@@ -54,6 +55,7 @@ def _build_chat_model(settings: Settings) -> BaseChatModel:
             api_key=settings.anthropic_api_key,
             temperature=settings.openai_temperature,
             max_tokens=settings.max_tokens,
+            streaming=True,
         )
 
     if provider == LLMProvider.DEEPSEEK:
@@ -67,6 +69,7 @@ def _build_chat_model(settings: Settings) -> BaseChatModel:
             base_url=settings.deepseek_base_url,
             temperature=settings.openai_temperature,
             max_tokens=settings.max_tokens,
+            streaming=True,
         )
 
     if provider == LLMProvider.QWEN:
@@ -80,6 +83,7 @@ def _build_chat_model(settings: Settings) -> BaseChatModel:
             base_url=settings.qwen_base_url,
             temperature=settings.openai_temperature,
             max_tokens=settings.max_tokens,
+            streaming=True,
         )
 
     raise ValueError(f"Unsupported llm_provider: {provider}")
