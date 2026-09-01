@@ -9,8 +9,8 @@ from typing import AsyncIterator
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app.agent.graph import get_compiled_graph
 from app.api.schemas import (
+    ChatMessage,
     ChatRequest,
     ChatResponse,
     HealthResponse,
@@ -156,5 +156,3 @@ async def get_thread(thread_id: str) -> ThreadHistory:
     return ThreadHistory(thread_id=thread_id, messages=[ChatMessage(**m) for m in messages])
 
 
-# Warm the graph on import so cold-start latency is paid once at app boot.
-_ = get_compiled_graph()

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from langchain_core.messages import AIMessage, SystemMessage
 from langgraph.prebuilt import ToolNode
 
-from app.agent.prompts import SYSTEM_PROMPT
+from app.agent.prompts import build_system_prompt
 from app.agent.state import AgentState
 from app.llm.factory import get_llm
 from app.tools import get_all_tools
@@ -48,16 +48,21 @@ def make_agent_node():
     for a module-level LLM singleton so test fixtures can override settings
     cleanly.
     """
-    chat, _ = _build_model_with_tools()
-    tool_node = ToolNode(get_all_tools())
+    chat, tools = _build_model_with_tools()
+    tool_node = ToolNode(tools)
+    system_prompt = build_system_prompt(tools)
 
-    def agent_node(state: AgentState) -> AgentState:
+    async def agent_node(state: AgentState) -> AgentState:
         messages = state["messages"]
         # Inject system prompt exactly once, at the front.
         if not messages or not isinstance(messages[0], SystemMessage):
-            messages = [SystemMessage(content=SYSTEM_PROMPT), *messages]
+            messages = [SystemMessage(content=system_prompt), *messages]
             state["messages"] = messages
-        response: AIMessage = chat.invoke(messages)
+
+        # Use async invoke so LangGraph's astream_events() emits per-token
+        # ``on_chat_model_stream`` events; the sync .invoke() blocks the event
+        # loop and causes ``message → done → end`` with zero ``token`` frames.
+        response: AIMessage = await chat.ainvoke(messages)
         return {
             "messages": [response],
             "iterations": state.get("iterations", 0) + 1,

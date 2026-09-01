@@ -7,6 +7,7 @@ request — only on app startup (lifespan).
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 from enum import StrEnum
@@ -15,7 +16,13 @@ from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    DotEnvSettingsSource,
+    EnvSettingsSource,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +45,31 @@ class MCPTransport(StrEnum):
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+class _CsvFriendlySourceMixin:
+    """Skip pydantic-settings' JSON decoding for selected string-backed list fields.
+
+    pydantic-settings treats ``list[str]`` as a *complex* field and tries
+    ``json.loads`` on every env/dotenv value before validators run. That breaks
+    natural env values like ``*`` or ``a,b,c``. This mixin hands the raw string
+    through for a known field so the field validator can do the CSV/JSON split.
+    """
+
+    def prepare_field_value(self, field_name, field, field_value, value_is_complex):
+        if field_name == "mcp_allowed_tools" and isinstance(field_value, str):
+            return field_value
+        return super().prepare_field_value(
+            field_name, field, field_value, value_is_complex
+        )
+
+
+class EnvSettingsSourceCsv(_CsvFriendlySourceMixin, EnvSettingsSource):
+    """Environment-variable source that tolerates CSV for ``mcp_allowed_tools``."""
+
+
+class DotEnvSettingsSourceCsv(_CsvFriendlySourceMixin, DotEnvSettingsSource):
+    """.env-file source that tolerates CSV for ``mcp_allowed_tools``."""
 
 
 class Settings(BaseSettings):
@@ -161,6 +193,24 @@ class Settings(BaseSettings):
     langsmith_api_key: str = Field(default="")
     langsmith_project: str = Field(default="smart-data-agent")
 
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """Use CSV-tolerant env/dotenv sources for *list* fields."""
+        del env_settings, dotenv_settings  # replaced below
+        return (
+            init_settings,
+            EnvSettingsSourceCsv(settings_cls),
+            DotEnvSettingsSourceCsv(settings_cls),
+            file_secret_settings,
+        )
+
     @field_validator("mcp_allowed_tools", mode="before")
     @classmethod
     def _split_allowed_tools_csv(cls, v):
@@ -176,7 +226,7 @@ class Settings(BaseSettings):
                 return []
             # Tolerate a JSON-looking list for symmetry with other settings.
             if stripped.startswith("[") and stripped.endswith("]"):
-                return v
+                return json.loads(stripped)
             return [s.strip() for s in stripped.split(",") if s.strip()]
         return v
 

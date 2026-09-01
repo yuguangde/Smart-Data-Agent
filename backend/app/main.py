@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -41,13 +42,18 @@ async def lifespan(app: FastAPI):
     )
 
     # MCP is best-effort: any failure is logged and we fall back to built-in tools.
+    loaded_mcp_tools: list[Any] = []
     try:
-        tools = await init_mcp_tools()
-        if tools:
-            logger.info("Loaded %d MCP tool(s)", len(tools))
+        loaded_mcp_tools = await init_mcp_tools()
+        if loaded_mcp_tools:
+            logger.info("Loaded %d MCP tool(s)", len(loaded_mcp_tools))
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("MCP initialisation failed during startup: %s", exc)
 
+    # Defensive: the graph may have been warmed during module import (before MCP
+    # tools were loaded). Clear the cache so the server process always compiles
+    # with the freshly-loaded toolset.
+    get_compiled_graph.cache_clear()
     get_compiled_graph()
 
     try:

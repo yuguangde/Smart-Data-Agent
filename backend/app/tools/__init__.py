@@ -43,7 +43,7 @@ def get_mcp_tools() -> list[BaseTool]:
     client to be configured).
     """
     try:
-        from app.tools.mcp_loader import list_tools as _mcp_list
+        from app.tools.mcp_loader import list_mcp_tools as _mcp_list
 
         return _mcp_list()
     except Exception as exc:  # pragma: no cover - defensive
