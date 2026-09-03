@@ -1,0 +1,16 @@
+semantic_model:
+  - name: mypa_service
+    description: 智能客服分析语义层
+    ai_context:
+      instructions: 用于智能客服相关的分析
+    datasets:
+      - name: 智能服务量表
+        source: dwd.dws_crm_mypa_service_exploded_di
+    metrics:
+      - name: 智能服务量
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: |
+                COUNT(DISTINCT CASE WHEN channel IN ('MYPA', '端外智能体调用') THEN router_id END)
+        filter: is_common_calc = 1 AND channel <> 'FAQ'

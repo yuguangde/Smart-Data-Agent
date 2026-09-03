@@ -15,6 +15,7 @@ from langchain_core.tools import BaseTool
 
 from app.tools.calculator import calculator
 from app.tools.datetime_tool import get_current_time
+from app.tools.file_reader import read_file
 from app.tools.knowledge_search import knowledge_search
 from app.tools.web_search import web_search
 
@@ -26,6 +27,7 @@ BUILTIN_TOOLS: list[BaseTool] = [
     calculator,
     web_search,
     knowledge_search,
+    read_file,
     # Register additional built-in tools here.
 ]
 
@@ -73,4 +75,5 @@ __all__ = [
     "calculator",
     "web_search",
     "knowledge_search",
+    "read_file",
 ]

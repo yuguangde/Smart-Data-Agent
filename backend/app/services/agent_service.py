@@ -277,16 +277,16 @@ async def get_history(thread_id: str) -> list[dict[str, Any]]:
     graph = get_compiled_graph()
     config = {"configurable": {"thread_id": thread_id}}
     try:
-        state = await graph.aget(config=config)
+        snapshot = await graph.aget_state(config=config)
     except Exception as exc:
         logger.warning("get_history(%s) failed: %s", thread_id, exc)
         return []
 
-    values = getattr(state, "values", None)
+    values = getattr(snapshot, "values", None)
     if isinstance(values, dict):
         return _history_to_messages(values)
-    if isinstance(state, dict):
-        return _history_to_messages(state)
+    if isinstance(snapshot, dict):
+        return _history_to_messages(snapshot)
     return []
 
 
