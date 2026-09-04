@@ -22,6 +22,7 @@ import type { ChatStreamHandle } from "@/api/chat";
 import type {
   ChatMessage,
   Conversation,
+  SendMessageBody,
   StreamEvent,
   ToolCall,
 } from "@/types/chat";
@@ -38,6 +39,8 @@ export interface ChatState {
   conversations: Conversation[];
   loading: boolean;
   pendingHistory: boolean;
+  pendingApproval: boolean;
+  approvalPayload: Record<string, unknown> | null;
   error: string | null;
 }
 
@@ -46,6 +49,7 @@ type Action =
   | { type: "SET_LOADING"; loading: boolean }
   | { type: "SET_PENDING_HISTORY"; pending: boolean }
   | { type: "SET_ERROR"; error: string | null }
+  | { type: "SET_PENDING_APPROVAL"; pending: boolean; payload?: Record<string, unknown> | null }
   | { type: "RESET_MESSAGES" }
   | { type: "SET_MESSAGES"; messages: ChatMessage[] }
   | { type: "APPEND_MESSAGE"; message: ChatMessage }
@@ -74,6 +78,12 @@ function reducer(state: ChatState, action: Action): ChatState {
       return { ...state, pendingHistory: action.pending };
     case "SET_ERROR":
       return { ...state, error: action.error };
+    case "SET_PENDING_APPROVAL":
+      return {
+        ...state,
+        pendingApproval: action.pending,
+        approvalPayload: action.payload ?? null,
+      };
     case "RESET_MESSAGES":
       return { ...state, messages: [] };
     case "SET_MESSAGES":
@@ -113,6 +123,7 @@ function truncate(s: string, n: number): string {
 
 export interface ChatStore extends ChatState {
   sendMessage: (content: string) => Promise<void>;
+  approveTool: (approved: boolean) => Promise<void>;
   newConversation: () => Promise<string>;
   selectConversation: (threadId: string) => Promise<void>;
   removeConversation: (threadId: string) => void;
@@ -126,6 +137,8 @@ export function useChatStore(): ChatStore {
     conversations: loadConversations(),
     loading: false,
     pendingHistory: false,
+    pendingApproval: false,
+    approvalPayload: null,
     error: null,
   });
 
@@ -275,66 +288,22 @@ export function useChatStore(): ChatStore {
     }
   }, [cancelInFlight]);
 
+  // Text of the last user message, used to update the conversation preview.
+  const pendingUserTextRef = useRef<string>("");
+
   /**
-   * Send `content` as a new user turn. Lazily creates a thread_id on the
-   * backend if the conversation is brand-new. Streams the assistant reply
-   * token-by-token; resolves once the `done` / `end` frame is received.
+   * Run one streaming pass against /chat/stream and patch the assistant bubble.
+   * Can be called for the initial user turn or for resuming after a tool
+   * approval pause.
    */
-  const sendMessage = useCallback(
-    async (content: string) => {
-      const text = content.trim();
-      if (!text) return;
-
-      // 1. Ensure there is a thread_id (create lazily).
-      let threadId = threadIdRef.current;
-      if (!threadId) {
-        try {
-          threadId = await createThread();
-          dispatch({ type: "SET_THREAD", threadId });
-          threadIdRef.current = threadId;
-        } catch (err) {
-          dispatch({
-            type: "SET_ERROR",
-            error:
-              err instanceof Error
-                ? err.message
-                : "failed to create thread",
-          });
-          return;
-        }
-      }
-
-      // 2. Spawn user + assistant bubbles.
-      const stamp = Date.now();
-      const userMsg: ChatMessage = {
-        id: `${threadId}-u-${stamp}`,
-        role: "user",
-        content: text,
-        createdAt: stamp,
-      };
-      const assistantMsg: ChatMessage = {
-        id: `${threadId}-a-${stamp}`,
-        role: "assistant",
-        content: "",
-        toolCalls: [],
-        streaming: true,
-        createdAt: stamp,
-      };
-      assistantIdRef.current = assistantMsg.id;
-      streamBufferRef.current = "";
-      toolCallsRef.current = new Map();
-
-      dispatch({ type: "APPEND_MESSAGE", message: userMsg });
-      dispatch({ type: "APPEND_MESSAGE", message: assistantMsg });
-      upsertConversation(threadId, text);
-      dispatch({ type: "SET_LOADING", loading: true });
-      dispatch({ type: "SET_ERROR", error: null });
-
-      const assistantId = assistantMsg.id;
-
-      // 3. Open the stream and route each SSE frame.
+  const runStream = useCallback(
+    async (
+      body: SendMessageBody,
+      assistantId: string,
+      userTextForPreview: string,
+    ) => {
       const handle = sendChatStream(
-        { thread_id: threadId, message: text, user_id: "anonymous" },
+        body,
         (ev: StreamEvent<unknown>) => {
           const name = String(ev.event);
           const data = ev.data as Record<string, unknown> | string | null;
@@ -428,6 +397,16 @@ export function useChatStore(): ChatStore {
               });
               break;
             }
+            case "tool_approval": {
+              dispatch({
+                type: "SET_PENDING_APPROVAL",
+                pending: true,
+                payload: data && typeof data === "object"
+                  ? (data as Record<string, unknown>)
+                  : null,
+              });
+              break;
+            }
             case "done":
             case "end": {
               dispatch({ type: "SET_LOADING", loading: false });
@@ -436,11 +415,13 @@ export function useChatStore(): ChatStore {
                 id: assistantId,
                 patch: { streaming: false },
               });
-              upsertConversation(
-                threadId,
-                text,
-                streamBufferRef.current || undefined,
-              );
+              if (body.resume === undefined) {
+                upsertConversation(
+                  threadIdRef.current || (body.thread_id as string),
+                  userTextForPreview,
+                  streamBufferRef.current || undefined,
+                );
+              }
               break;
             }
             case "error": {
@@ -494,6 +475,98 @@ export function useChatStore(): ChatStore {
     [upsertConversation, snapshotToolCalls],
   );
 
+  /**
+   * Send `content` as a new user turn. Lazily creates a thread_id on the
+   * backend if the conversation is brand-new. Streams the assistant reply
+   * token-by-token; resolves once the `done` / `end` frame is received.
+   */
+  const sendMessage = useCallback(
+    async (content: string) => {
+      const text = content.trim();
+      if (!text) return;
+
+      // 1. Ensure there is a thread_id (create lazily).
+      let threadId = threadIdRef.current;
+      if (!threadId) {
+        try {
+          threadId = await createThread();
+          dispatch({ type: "SET_THREAD", threadId });
+          threadIdRef.current = threadId;
+        } catch (err) {
+          dispatch({
+            type: "SET_ERROR",
+            error:
+              err instanceof Error
+                ? err.message
+                : "failed to create thread",
+          });
+          return;
+        }
+      }
+
+      // 2. Spawn user + assistant bubbles.
+      const stamp = Date.now();
+      const userMsg: ChatMessage = {
+        id: `${threadId}-u-${stamp}`,
+        role: "user",
+        content: text,
+        createdAt: stamp,
+      };
+      const assistantMsg: ChatMessage = {
+        id: `${threadId}-a-${stamp}`,
+        role: "assistant",
+        content: "",
+        toolCalls: [],
+        streaming: true,
+        createdAt: stamp,
+      };
+      assistantIdRef.current = assistantMsg.id;
+      streamBufferRef.current = "";
+      toolCallsRef.current = new Map();
+      pendingUserTextRef.current = text;
+
+      dispatch({ type: "APPEND_MESSAGE", message: userMsg });
+      dispatch({ type: "APPEND_MESSAGE", message: assistantMsg });
+      upsertConversation(threadId, text);
+      dispatch({ type: "SET_LOADING", loading: true });
+      dispatch({ type: "SET_ERROR", error: null });
+
+      await runStream(
+        { thread_id: threadId, message: text, user_id: "anonymous" },
+        assistantMsg.id,
+        text,
+      );
+    },
+    [runStream, upsertConversation],
+  );
+
+  /**
+   * Resume a paused graph after the user has approved or denied a sensitive
+   * tool call (currently read_file).
+   */
+  const approveTool = useCallback(
+    async (approved: boolean) => {
+      const assistantId = assistantIdRef.current;
+      const threadId = threadIdRef.current;
+      if (!assistantId || !threadId) return;
+
+      dispatch({ type: "SET_PENDING_APPROVAL", pending: false });
+      dispatch({ type: "SET_LOADING", loading: true });
+      dispatch({ type: "SET_ERROR", error: null });
+
+      await runStream(
+        {
+          thread_id: threadId,
+          resume: { approved },
+          user_id: "anonymous",
+        },
+        assistantId,
+        pendingUserTextRef.current,
+      );
+    },
+    [runStream],
+  );
+
   // Try to reopen the last thread on first mount (best-effort).
   useEffect(() => {
     const last = localStorage.getItem(THREAD_STORAGE_KEY);
@@ -505,6 +578,7 @@ export function useChatStore(): ChatStore {
   return {
     ...state,
     sendMessage,
+    approveTool,
     newConversation,
     selectConversation,
     removeConversation,

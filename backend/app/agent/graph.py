@@ -8,8 +8,9 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import tools_condition
 
 from app.agent.nodes import make_agent_node
+from app.agent.review import tool_review_node
 from app.agent.state import AgentState
-from app.config import CheckpointerKind, get_settings
+from app.config import get_settings
 from app.memory.checkpointer import build_checkpointer
 
 logger = logging.getLogger(__name__)
@@ -30,21 +31,27 @@ def build_graph():
 
     graph = StateGraph(AgentState)
     graph.add_node("agent", agent_node)
+    graph.add_node("review", tool_review_node)
     graph.add_node("tools", tool_node)
 
     graph.add_edge(START, "agent")
-    graph.add_conditional_edges("agent", _should_continue, {"tools": "tools", END: END})
-    graph.add_edge("tools", "agent")
 
     settings = get_settings()
+    if settings.hitl:
+        graph.add_conditional_edges(
+            "agent", _should_continue, {"tools": "review", END: END}
+        )
+        graph.add_edge("review", "tools")
+    else:
+        graph.add_conditional_edges(
+            "agent", _should_continue, {"tools": "tools", END: END}
+        )
+
+    graph.add_edge("tools", "agent")
+
     checkpointer = build_checkpointer(settings)
 
-    interrupt_before: list[str] = ["agent"] if settings.hitl else []
-
-    compiled = graph.compile(
-        checkpointer=checkpointer,
-        interrupt_before=interrupt_before or None,
-    )
+    compiled = graph.compile(checkpointer=checkpointer)
     logger.info(
         "Compiled graph: checkpointer=%s hitl=%s",
         settings.checkpointer,

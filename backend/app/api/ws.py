@@ -6,11 +6,7 @@ import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from app.services.agent_service import (
-    get_history,
-    new_thread_id,
-    stream_events,
-)
+from app.services.agent_service import get_history, new_thread_id, stream_events
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["ws-chat"])
@@ -30,6 +26,8 @@ def _to_ws_frame(ev: dict) -> dict:
         return {"type": "done", **data}
     if kind == "error":
         return {"type": "error", "data": str(data)}
+    if kind == "tool_approval":
+        return {"type": "tool_approval", "data": data}
     # token / fallback
     return {"type": "token", "data": data if isinstance(data, str) else str(data)}
 
@@ -39,11 +37,35 @@ async def ws_chat(ws: WebSocket) -> None:
     """Bidirectional WebSocket session.
 
     Wire protocol (one JSON frame per message):
-        Inbound  -> {"type": "message"|"history"|"reset"|"ping", ...}
-        Outbound -> {"type": "thread"|"token"|"tool_start"|"tool_end"|"done"|"error"|"history"|"pong", ...}
+        Inbound  -> {"type": "message"|"history"|"reset"|"ping"|"tool_approval", ...}
+        Outbound -> {"type": "thread"|"token"|"tool_start"|"tool_end"|"done"|"error"|"history"|"pong"|"tool_approval", ...}
     """
     await ws.accept()
     thread_id: str | None = None
+
+    async def _send_stream(
+        *,
+        content: str | None = None,
+        user_id: str = "anonymous",
+        metadata: dict | None = None,
+        resume: dict | None = None,
+    ) -> bool:
+        """Run one streaming pass. Returns True if it paused for approval."""
+        try:
+            async for ev in stream_events(
+                user_message=content,
+                thread_id=thread_id,
+                user_id=user_id,
+                metadata=metadata,
+                resume=resume,
+            ):
+                await ws.send_json(_to_ws_frame(ev))
+                if ev.get("event") == "tool_approval":
+                    return True
+        except Exception as exc:
+            logger.exception("WS stream failed: %s", exc)
+            await ws.send_json({"type": "error", "data": str(exc)})
+        return False
 
     try:
         while True:
@@ -65,8 +87,8 @@ async def ws_chat(ws: WebSocket) -> None:
                 continue
 
             if kind == "reset":
-                thread_id = new_thread_id()
-                await ws.send_json({"type": "thread", "thread_id": thread_id})
+                thread_id = None
+                await ws.send_json({"type": "thread", "thread_id": None})
                 continue
 
             if kind == "history":
@@ -74,8 +96,17 @@ async def ws_chat(ws: WebSocket) -> None:
                 if not tid:
                     await ws.send_json({"type": "error", "data": "thread_id required"})
                     continue
-                msgs = await get_history(tid)
-                await ws.send_json({"type": "history", "thread_id": tid, "data": msgs})
+                try:
+                    msgs = await get_history(tid)
+                    await ws.send_json({"type": "history", "thread_id": tid, "data": msgs})
+                except Exception as exc:
+                    await ws.send_json({"type": "error", "data": f"history failed: {exc}"})
+                continue
+
+            if kind == "tool_approval":
+                # User responded to a pending tool-approval request.
+                approved = bool(payload.get("approved", False))
+                await _send_stream(resume={"approved": approved})
                 continue
 
             if kind == "message":
@@ -83,21 +114,41 @@ async def ws_chat(ws: WebSocket) -> None:
                 if not content:
                     await ws.send_json({"type": "error", "data": "content required"})
                     continue
-                tid = payload.get("thread_id") or thread_id or new_thread_id()
-                thread_id = tid
-                await ws.send_json({"type": "thread", "thread_id": tid})
+                thread_id = payload.get("thread_id") or thread_id
+                if not thread_id:
+                    thread_id = new_thread_id()
 
-                try:
-                    async for ev in stream_events(
-                        user_message=content,
-                        thread_id=tid,
-                        user_id=payload.get("user_id", "anonymous"),
-                        metadata=payload.get("metadata") or {},
-                    ):
-                        await ws.send_json(_to_ws_frame(ev))
-                except Exception as exc:
-                    logger.exception("WS stream failed: %s", exc)
-                    await ws.send_json({"type": "error", "data": str(exc)})
+                user_id = payload.get("user_id") or "anonymous"
+                metadata = payload.get("metadata") or {}
+
+                await ws.send_json({"type": "thread", "thread_id": thread_id})
+                needs_approval = await _send_stream(
+                    content=content, user_id=user_id, metadata=metadata
+                )
+
+                if needs_approval:
+                    # Block until the user approves or rejects the sensitive tool.
+                    while True:
+                        try:
+                            raw2 = await ws.receive_text()
+                        except WebSocketDisconnect:
+                            return
+                        try:
+                            payload2 = json.loads(raw2)
+                        except json.JSONDecodeError:
+                            await ws.send_json({"type": "error", "data": "invalid JSON"})
+                            continue
+
+                        if payload2.get("type") == "ping":
+                            await ws.send_json({"type": "pong"})
+                            continue
+
+                        if payload2.get("type") == "tool_approval":
+                            approved = bool(payload2.get("approved", False))
+                            await _send_stream(resume={"approved": approved})
+                            break
+
+                        await ws.send_json({"type": "error", "data": "waiting for tool_approval response"})
                 continue
 
             await ws.send_json({"type": "error", "data": f"unknown message type: {kind!r}"})
