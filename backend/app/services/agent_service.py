@@ -16,6 +16,7 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
+from langgraph.types import Command
 
 from app.agent.graph import get_compiled_graph
 from app.agent.state import AgentState
@@ -63,7 +64,7 @@ def _coerce_message(raw: Any) -> dict[str, Any]:
                         {
                             "id": call.get("id"),
                             "name": call.get("name"),
-                            "args": call.get("args"),
+                            "input": call.get("args"),
                         }
                     )
                 else:
@@ -71,7 +72,7 @@ def _coerce_message(raw: Any) -> dict[str, Any]:
                         {
                             "id": getattr(call, "id", None),
                             "name": getattr(call, "name", None),
-                            "args": getattr(call, "args", None),
+                            "input": getattr(call, "args", None),
                         }
                     )
             out["tool_calls"] = serialised
@@ -93,13 +94,61 @@ def _coerce_message(raw: Any) -> dict[str, Any]:
 
 
 def _history_to_messages(values: dict[str, Any]) -> list[dict[str, Any]]:
-    """Drop injected system prompts and return plain message dicts."""
+    """Return conversation history in the same shape the frontend sees while streaming.
+
+    - Drops injected system prompts.
+    - Drops standalone ToolMessages (their content lives inside the assistant tool_calls).
+    - Merges consecutive assistant messages into one bubble so tool-calling
+      turns look identical in history and streaming.
+    """
     raw_msgs = values.get("messages", [])
+
+    # First pass: coerce and collect assistant messages so we can attach tool outputs.
     out: list[dict[str, Any]] = []
+    ai_messages: list[dict[str, Any]] = []
+
+    def _flush_ai_group() -> None:
+        if not ai_messages:
+            return
+        merged: dict[str, Any] = {
+            "role": "assistant",
+            "content": ai_messages[-1].get("content", ""),
+        }
+        merged_tool_calls: list[dict[str, Any]] = []
+        for ai in ai_messages:
+            for tc in ai.get("tool_calls") or []:
+                if tc not in merged_tool_calls:
+                    merged_tool_calls.append(tc)
+        if merged_tool_calls:
+            merged["tool_calls"] = merged_tool_calls
+        out.append(merged)
+        ai_messages.clear()
+
     for m in raw_msgs:
         if isinstance(m, SystemMessage):
             continue
-        out.append(_coerce_message(m))
+        if isinstance(m, ToolMessage):
+            # Attach the tool output to the most recent assistant message that owns it.
+            tool_call_id = getattr(m, "tool_call_id", None)
+            output = _plain_str(m.content)
+            for ai in reversed(ai_messages):
+                for tc in ai.get("tool_calls") or []:
+                    if tc.get("id") == tool_call_id:
+                        tc["output"] = output
+                        break
+                else:
+                    continue
+                break
+            continue
+
+        cm = _coerce_message(m)
+        if cm.get("role") in ("assistant", "ai"):
+            ai_messages.append(cm)
+        else:
+            _flush_ai_group()
+            out.append(cm)
+
+    _flush_ai_group()
     return out
 
 
@@ -140,8 +189,8 @@ def _aggregate_tool_calls(values: dict[str, Any]) -> list[dict[str, Any]]:
                     {
                         "id": m.tool_call_id,
                         "name": name,
-                        "args": args,
-                        "result": _plain_str(m.content),
+                        "input": args,
+                        "output": _plain_str(m.content),
                     }
                 )
     return calls
@@ -170,43 +219,74 @@ async def invoke(
     thread_id: str | None = None,
     user_id: str = "anonymous",
     metadata: dict[str, Any] | None = None,
+    resume: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Run the agent once and return a JSON-friendly reply."""
+    """Run the agent once and return a JSON-friendly reply.
+
+    If ``resume`` is provided, resumes a paused graph instead of starting a new
+    turn (e.g. user approval for a sensitive tool call).
+    """
     thread_id = thread_id or new_thread_id()
     graph = get_compiled_graph()
-    state_in = make_initial_state(thread_id, user_message, user_id, metadata or {})
     config = {"configurable": {"thread_id": thread_id, "user_id": user_id}}
 
-    result = await graph.ainvoke(state_in, config=config)
+    if resume is None:
+        input_value = make_initial_state(thread_id, user_message, user_id, metadata or {})
+    else:
+        input_value = Command(resume=resume)
+
+    result = await graph.ainvoke(input_value, config=config)
+
+    # LangGraph surfaces dynamic interrupts under the ``__interrupt__`` key
+    # rather than raising ``GraphInterrupt`` when using ``ainvoke``.
+    interrupts = result.get("__interrupt__") if isinstance(result, dict) else None
+    if interrupts:
+        payload = interrupts[0].value if hasattr(interrupts[0], "value") else interrupts[0]
+        payload = payload if isinstance(payload, dict) else {}
+        return {
+            "thread_id": thread_id,
+            "message": {"role": "assistant", "content": ""},
+            "iterations": result.get("iterations", 0) if isinstance(result, dict) else 0,
+            "tool_calls": _aggregate_tool_calls(result) if isinstance(result, dict) else [],
+            "pending_approval": payload,
+        }
+
     last = _last_ai_message(result) or {"role": "assistant", "content": ""}
     return {
         "thread_id": thread_id,
         "message": last,
-        "iterations": result.get("iterations", 0),
-        "tool_calls": _aggregate_tool_calls(result),
+        "iterations": result.get("iterations", 0) if isinstance(result, dict) else 0,
+        "tool_calls": _aggregate_tool_calls(result) if isinstance(result, dict) else [],
     }
 
 
 async def stream_events(
     *,
-    user_message: str,
+    user_message: str | None = None,
     thread_id: str | None = None,
     user_id: str = "anonymous",
     metadata: dict[str, Any] | None = None,
+    resume: dict[str, Any] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Yield SSE-friendly events describing the agent run.
 
-    Schema: ``{"event": "message|token|tool_start|tool_end|done|error", "data": ...}``
+    Schema: ``{"event": "message|token|tool_start|tool_end|done|error|tool_approval", "data": ...}``
+
+    If ``resume`` is provided, the graph is resumed from a prior interrupt
+    (e.g. user approval for a sensitive tool call) instead of starting a new turn.
     """
-    thread_id = thread_id or new_thread_id()
     graph = get_compiled_graph()
-    state_in = make_initial_state(thread_id, user_message, user_id, metadata or {})
+    thread_id = thread_id or new_thread_id()
     config = {"configurable": {"thread_id": thread_id, "user_id": user_id}}
 
-    yield {"event": "message", "data": {"thread_id": thread_id}}
+    if resume is None:
+        input_value = make_initial_state(thread_id, user_message or "", user_id, metadata or {})
+        yield {"event": "message", "data": {"thread_id": thread_id}}
+    else:
+        input_value = Command(resume=resume)
 
     try:
-        async for ev in graph.astream_events(state_in, config=config, version="v2"):
+        async for ev in graph.astream_events(input_value, config=config, version="v2"):
             kind = ev.get("event")
             name = ev.get("name", "")
             data = ev.get("data", {}) or {}
@@ -270,6 +350,22 @@ async def stream_events(
     except Exception as exc:
         logger.exception("Streaming failed: %s", exc)
         yield {"event": "error", "data": str(exc)}
+        return
+
+    # After the event stream finishes, check whether the graph is paused on a
+    # dynamic interrupt. ``ainvoke`` surfaces interrupts via ``__interrupt__``,
+    # but ``astream_events`` does not raise an exception for them in v2.
+    try:
+        snapshot = await graph.aget_state(config=config)
+    except Exception as exc:
+        logger.warning("Failed to read graph state after stream: %s", exc)
+        return
+
+    interrupts = getattr(snapshot, "interrupts", None)
+    if interrupts:
+        payload = interrupts[0].value if hasattr(interrupts[0], "value") else interrupts[0]
+        payload = payload if isinstance(payload, dict) else {}
+        yield {"event": "tool_approval", "data": payload}
 
 
 async def get_history(thread_id: str) -> list[dict[str, Any]]:

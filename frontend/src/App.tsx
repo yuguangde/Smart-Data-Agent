@@ -35,8 +35,11 @@ export default function App() {
     conversations,
     loading,
     pendingHistory,
+    pendingApproval,
+    approvalPayload,
     error,
     sendMessage,
+    approveTool,
     newConversation,
     selectConversation,
     removeConversation,
@@ -130,9 +133,12 @@ export default function App() {
               <SenderBox
                 loading={loading}
                 disabled={pendingHistory}
+                pendingApproval={pendingApproval}
+                approvalPayload={approvalPayload}
                 onSend={(text) => {
                   void sendMessage(text);
                 }}
+                onApprove={approveTool}
                 onStop={stop}
               />
             </Footer>

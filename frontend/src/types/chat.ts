@@ -61,9 +61,10 @@ export interface Conversation {
 /** Request body for `POST /chat` and `POST /chat/stream`. */
 export interface SendMessageBody {
   thread_id?: string | null;
-  message: string;
+  message?: string;
   user_id?: string;
   metadata?: Record<string, unknown>;
+  resume?: Record<string, unknown> | null;
 }
 
 /** Response body for `GET /threads/{threadId}`. */

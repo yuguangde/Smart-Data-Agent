@@ -19,6 +19,14 @@ class ChatMessage(BaseModel):
     tool_call_id: str | None = None
 
 
+class ToolApprovalResume(BaseModel):
+    """Resume payload used when continuing from a tool-approval interrupt."""
+
+    approved: bool = Field(
+        ..., description="Whether the user approved the pending sensitive tool calls."
+    )
+
+
 class ChatRequest(BaseModel):
     """Request body for POST /chat and POST /chat/stream."""
 
@@ -27,9 +35,13 @@ class ChatRequest(BaseModel):
     thread_id: str | None = Field(
         default=None, description="Reuse an existing thread for multi-turn chat."
     )
-    message: str = Field(min_length=1, max_length=32_000)
+    message: str = Field(default="", min_length=0, max_length=32_000)
     user_id: str = Field(default="anonymous", max_length=128)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    resume: ToolApprovalResume | dict[str, Any] | None = Field(
+        default=None,
+        description="Resume a paused graph (e.g. user approval for a tool call).",
+    )
 
 
 class ChatResponse(BaseModel):
@@ -39,6 +51,10 @@ class ChatResponse(BaseModel):
     message: ChatMessage
     iterations: int = 0
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    pending_approval: dict[str, Any] | None = Field(
+        default=None,
+        description="If present, the graph is paused waiting for tool approval.",
+    )
 
 
 class ThreadCreateResponse(BaseModel):
@@ -81,6 +97,7 @@ __all__ = [
     "ChatMessage",
     "ChatRequest",
     "ChatResponse",
+    "ToolApprovalResume",
     "ThreadCreateResponse",
     "ThreadHistory",
     "HealthResponse",
