@@ -1,0 +1,3 @@
+{"question": "请读取 backend/ossie/mypa_service.ossie.yml 的内容并总结", "expected_tool": "read_file", "expected_args": {"path": "backend/ossie/mypa_service.ossie.yml"}, "expected_in_answer": ["智能客服", "语义层", "智能服务量"], "tags": ["read_file", "hitl", "summary"]}
+{"question": "backend/app/config.py 里写了什么", "expected_tool": "read_file", "expected_args": {"path": "backend/app/config.py"}, "expected_in_answer": ["Settings", "LLMProvider", "CheckpointerKind"], "tags": ["read_file", "hitl", "config"]}
+{"question": "把 backend/ossie/mypa_service.ossie.yml 读给我看看", "expected_tool": "read_file", "expected_args": {"path": "backend/ossie/mypa_service.ossie.yml"}, "expected_in_answer": ["semantic_model"], "tags": ["read_file", "hitl"]}
