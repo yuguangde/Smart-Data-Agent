@@ -13,6 +13,7 @@ import logging
 
 from langchain_core.tools import BaseTool
 
+from app.query.tools import generate_dsl_json
 from app.tools.calculator import calculator
 from app.tools.datetime_tool import get_current_time
 from app.tools.file_reader import read_file
@@ -28,6 +29,7 @@ BUILTIN_TOOLS: list[BaseTool] = [
     web_search,
     knowledge_search,
     read_file,
+    generate_dsl_json,
     # Register additional built-in tools here.
 ]
 
