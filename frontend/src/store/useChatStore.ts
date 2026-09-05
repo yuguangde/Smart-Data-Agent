@@ -255,8 +255,9 @@ export function useChatStore(): ChatStore {
         );
         dispatch({ type: "SET_MESSAGES", messages: msgs });
       } catch (err) {
-        // Backend may have lost the thread (in-memory checkpointer).
+        const msg = err instanceof Error ? err.message : "加载历史记录失败";
         console.warn("history fetch failed", err);
+        dispatch({ type: "SET_ERROR", error: msg });
       } finally {
         dispatch({ type: "SET_PENDING_HISTORY", pending: false });
       }

@@ -60,12 +60,13 @@ export function ChatList({ messages, loading }: Props) {
     <div className="chat-scroll" ref={scrollRef}>
       <Bubble.List
         style={{ padding: 16 }}
-        items={messages.map((m) => ({
-          content: m.content,
-          role: m.role === "user" ? "user" : "assistant",
-          loading: m.streaming && !m.content,
-          avatar:
-            m.role === "user" ? (
+        items={messages.map((m) => {
+          const isUser = m.role === "user" || m.role === "human";
+          return {
+            content: m.content,
+            role: isUser ? "user" : "assistant",
+            loading: m.streaming && !m.content,
+            avatar: isUser ? (
               <Avatar icon={<UserOutlined />} />
             ) : (
               <Avatar
@@ -73,13 +74,14 @@ export function ChatList({ messages, loading }: Props) {
                 style={{ backgroundColor: "#1677ff" }}
               />
             ),
-          // `Bubble.List` types vary; keep the raw message for nested render.
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          ...({ meta: m } as any),
-          messageRender: (content: string) => (
-            <MessageBubble content={content} message={m} />
-          ),
-        }))}
+            // `Bubble.List` types vary; keep the raw message for nested render.
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            ...({ meta: m } as any),
+            messageRender: (content: string) => (
+              <MessageBubble content={content} message={m} />
+            ),
+          };
+        })}
       />
     </div>
   );

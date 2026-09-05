@@ -26,6 +26,18 @@ logger = logging.getLogger(__name__)
 
 # ---------- Helpers ----------
 
+# LangChain message roles -> frontend-friendly roles.
+_ROLE_MAP = {
+    "ai": "assistant",
+    "human": "user",
+}
+
+
+def _normalise_role(role: str) -> str:
+    """Map LangChain native roles to the roles the frontend expects."""
+    return _ROLE_MAP.get(role, role)
+
+
 def new_thread_id() -> str:
     """Return a fresh opaque thread identifier."""
     return uuid.uuid4().hex
@@ -51,7 +63,7 @@ def _plain_str(content: Any) -> str:
 def _coerce_message(raw: Any) -> dict[str, Any]:
     """Normalise LangChain message objects and dicts into JSON-friendly shape."""
     if isinstance(raw, BaseMessage):
-        msg_type = raw.type
+        msg_type = _normalise_role(raw.type)
         content = _plain_str(raw.content)
         out: dict[str, Any] = {"role": msg_type, "content": content}
 
@@ -83,7 +95,7 @@ def _coerce_message(raw: Any) -> dict[str, Any]:
         return out
 
     # raw dict (e.g. streamed payload)
-    msg_type = raw.get("role") or raw.get("type", "user")
+    msg_type = _normalise_role(raw.get("role") or raw.get("type", "user"))
     content = _plain_str(raw.get("content", ""))
     out = {"role": msg_type, "content": content}
     if raw.get("tool_calls"):
