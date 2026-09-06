@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import date
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -23,12 +24,14 @@ logger = logging.getLogger(__name__)
 SYSTEM_PROMPT = """\
 你是 Smart Data Agent 的指标查询助手。你的任务是：把用户的自然语言问题转换成一个受控的 JSON DSL。
 
+今天是：{today}
+
 规则：
 1. 你只能使用语义层中明确定义的数据集、指标和维度（见下文白名单）。禁止编造任何字段或指标。
 2. 如果用户问到的指标不在白名单里，不要自己推断 SQL 或看字段，必须拒绝并说明“当前语义层没有定义该指标，请补充语义层定义”。
-3. 时间范围要转换为绝对日期（YYYY-MM-DD）。如果用户说“最近7天”，以今天为基准计算起止日期。
+3. 时间范围要转换为绝对日期（YYYY-MM-DD）。如果用户说“最近7天”，从今天 {today} 往前推 7 天（含今天）作为起止日期。
 4. 生成的 DSL 必须能通过 Pydantic 校验；校验失败的字段会回传给你修正。
-5. 只输出 JSON DSL，不要输出解释文字。
+5. 只输出 JSON DSL，不要输出解释文字。如果必须补充说明，用 ```json 代码块包裹 DSL。
 
 可用语义层：
 {semantic_context}
@@ -51,6 +54,7 @@ def _dataset_context(dataset: SemanticDataset) -> str:
 def _build_system_message(semantic_context: str) -> SystemMessage:
     schema = metric_query_json_schema()
     content = SYSTEM_PROMPT.format(
+        today=date.today().isoformat(),
         semantic_context=semantic_context,
         schema=json.dumps(schema, ensure_ascii=False, indent=2),
     )
@@ -71,12 +75,30 @@ def _serialize_validation_error(exc: ValidationError) -> str:
 
 
 def _extract_json(raw: str) -> str:
-    """Strip markdown code fences if the model wrapped JSON in ```json ... ```."""
+    """Extract JSON from the model output, tolerating markdown code fences.
+
+    Some models add explanatory text before the fenced JSON block. We first
+    look for a ```json ... ``` block, then any ``` ... ``` block, and fall
+    back to the stripped raw text.
+    """
     cleaned = raw.strip()
-    if cleaned.startswith("```"):
-        cleaned = "\n".join(
-            line for line in cleaned.splitlines() if not line.startswith("```")
-        ).strip()
+
+    # 1. Prefer an explicitly labelled json fence anywhere in the text.
+    start = cleaned.find("```json")
+    if start != -1:
+        block = cleaned[start:]
+        end = block.find("```", len("```json"))
+        if end != -1:
+            return block[len("```json"):end].strip()
+
+    # 2. Otherwise take the first generic fenced block.
+    start = cleaned.find("```")
+    if start != -1:
+        block = cleaned[start:]
+        end = block.find("```", 3)
+        if end != -1:
+            return block[3:end].strip()
+
     return cleaned
 
 

@@ -124,6 +124,11 @@ class Settings(BaseSettings):
         description="Enable Human-in-the-Loop interrupt before agent node.",
     )
 
+    query_sql_dialect: str = Field(
+        default="ansi",
+        description="Target SQL dialect for metric query rendering. One of: ansi, trino, spark, hive.",
+    )
+
     # -------- MCP (Model Context Protocol) servers --------
     # Connect a remote MCP server (e.g. an mcp-server-starrocks instance
     # running on http://host:8000/mcp) and expose its tools to the agent.
@@ -240,6 +245,17 @@ class Settings(BaseSettings):
                 f"mcp_tool_prefix must be empty or alphanumeric (with optional '_'), got {v!r}"
             )
         return v
+
+    @field_validator("query_sql_dialect", mode="before")
+    @classmethod
+    def _validate_query_sql_dialect(cls, v: str) -> str:
+        allowed = {"ansi", "trino", "spark", "hive"}
+        normalized = str(v).strip().lower()
+        if normalized not in allowed:
+            raise ValueError(
+                f"query_sql_dialect must be one of {sorted(allowed)}, got {v!r}"
+            )
+        return normalized
 
     @property
     def sqlite_path_resolved(self) -> Path:
