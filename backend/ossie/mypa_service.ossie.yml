@@ -14,3 +14,15 @@ semantic_model:
               expression: |
                 COUNT(DISTINCT CASE WHEN channel IN ('MYPA', '端外智能体调用') THEN router_id END)
         filter: is_common_calc = 1 AND channel <> 'FAQ'
+      - name: 按键评价量
+        expression:
+          dialect: ANSI_SQL
+          expression: |
+            COUNT(DISTINCT IF(is_online_sat = '1', router_id, NULL))
+        filter: is_common_calc = 1 AND channel <> 'FAQ'
+      - name: 按键评价满意量
+        expression:
+          dialect: ANSI_SQL
+          expression: |
+            COUNT(DISTINCT IF(is_online_sat_satisfaction = '1', router_id, NULL))
+        filter: is_common_calc = 1 AND channel <> 'FAQ'

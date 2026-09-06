@@ -25,14 +25,18 @@ from app.query.registry import (
     SemanticModel,
     SemanticRegistry,
 )
+from app.query.renderer import DateDialect, MetricQueryRenderer, RenderError, render_to_sql
 
 __all__ = [
     "Agg",
+    "DateDialect",
     "Filter",
     "FilterOp",
     "Metric",
     "MetricQuery",
+    "MetricQueryRenderer",
     "OrderByItem",
+    "RenderError",
     "Scalar",
     "SemanticDataset",
     "SemanticMetric",
@@ -45,4 +49,5 @@ __all__ = [
     "generate_metric_query",
     "metric_query_json_schema",
     "metric_query_tools",
+    "render_to_sql",
 ]
