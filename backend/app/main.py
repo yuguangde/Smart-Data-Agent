@@ -86,6 +86,16 @@ def create_app() -> FastAPI:
 
     app.include_router(api_router)
 
+    @app.get("/health", tags=["health"])
+    async def health() -> JSONResponse:
+        return JSONResponse(
+            {
+                "status": "ok",
+                "llm_provider": settings.llm_provider.value,
+                "checkpointer": settings.checkpointer.value,
+            }
+        )
+
     @app.get("/", include_in_schema=False)
     async def root() -> JSONResponse:
         return JSONResponse(

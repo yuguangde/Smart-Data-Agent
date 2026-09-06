@@ -10,9 +10,10 @@ import pytest
 from langchain_core.messages import AIMessage
 
 import app.query.tools as tools_mod
-from app.query.generator import _extract_json
+from app.query._utils import _extract_json
+from app.query.intent import UserIntent
 from app.query.registry import SemanticRegistry
-from app.query.tools import generate_dsl_json
+from app.query.tools import generate_dsl_json, generate_sql
 
 
 SAMPLE_YAML = """
@@ -28,6 +29,8 @@ semantic_model:
           - name: revenue
             expression: amount
             default_agg: sum
+          - name: 智能服务量
+            expression: COUNT(DISTINCT router_id)
 """
 
 VALID_DSL = {
@@ -64,7 +67,7 @@ class _FakeLLM:
         return AIMessage(content=self.content)
 
 
-def _patch_llm(monkeypatch: pytest.MonkeyPatch, content: str) -> None:
+def _patch_generator_llm(monkeypatch: pytest.MonkeyPatch, content: str) -> None:
     """Patch app.query.generator.get_llm to return a fake LLM."""
     from app.query import generator as generator_mod
 
@@ -72,6 +75,16 @@ def _patch_llm(monkeypatch: pytest.MonkeyPatch, content: str) -> None:
         return _FakeLLM(content)
 
     monkeypatch.setattr(generator_mod, "get_llm", fake_get_llm)
+
+
+def _patch_nl2sql_llm(monkeypatch: pytest.MonkeyPatch, content: str) -> None:
+    """Patch app.query.nl2sql.get_llm to return a fake LLM."""
+    from app.query import nl2sql as nl2sql_mod
+
+    def fake_get_llm(*args: Any, **kwargs: Any) -> _FakeLLM:
+        return _FakeLLM(content)
+
+    monkeypatch.setattr(nl2sql_mod, "get_llm", fake_get_llm)
 
 
 @pytest.fixture
@@ -92,7 +105,7 @@ async def test_generate_dsl_json_returns_dsl_and_sql(
     monkeypatch: pytest.MonkeyPatch,
     sample_registry: SemanticRegistry,
 ) -> None:
-    _patch_llm(monkeypatch, json.dumps(VALID_DSL, ensure_ascii=False))
+    _patch_generator_llm(monkeypatch, json.dumps(VALID_DSL, ensure_ascii=False))
     SemanticRegistry._instance = sample_registry
 
     result = json.loads(await generate_dsl_json.ainvoke({"question": "按 region 汇总 revenue"}))
@@ -113,7 +126,7 @@ async def test_generate_dsl_json_sql_render_failure_keeps_dsl(
     sample_registry: SemanticRegistry,
 ) -> None:
     dsl_with_missing_dataset = {**VALID_DSL, "dataset": "missing_dataset"}
-    _patch_llm(monkeypatch, json.dumps(dsl_with_missing_dataset, ensure_ascii=False))
+    _patch_generator_llm(monkeypatch, json.dumps(dsl_with_missing_dataset, ensure_ascii=False))
     SemanticRegistry._instance = sample_registry
 
     result = json.loads(await generate_dsl_json.ainvoke({"question": "missing dataset"}))
@@ -128,7 +141,7 @@ async def test_generate_dsl_json_sql_render_failure_keeps_dsl(
 async def test_generate_dsl_json_dsl_failure_preserved(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _patch_llm(monkeypatch, "not valid json")
+    _patch_generator_llm(monkeypatch, "not valid json")
 
     result = json.loads(await generate_dsl_json.ainvoke({"question": "bad dsl"}))
 
@@ -180,7 +193,7 @@ async def test_generate_dsl_json_respects_configured_dialect(
     monkeypatch: pytest.MonkeyPatch,
     sample_registry: SemanticRegistry,
 ) -> None:
-    _patch_llm(monkeypatch, json.dumps(DSL_WITH_MONTH_GRAIN, ensure_ascii=False))
+    _patch_generator_llm(monkeypatch, json.dumps(DSL_WITH_MONTH_GRAIN, ensure_ascii=False))
     SemanticRegistry._instance = sample_registry
     _patch_settings(monkeypatch, "trino")
 
@@ -188,6 +201,59 @@ async def test_generate_dsl_json_respects_configured_dialect(
 
     assert result["ok"] is True
     assert "DATE_TRUNC('month', dt)" in result["sql"]
+
+
+# ---------------------------------------------------------------------------
+# generate_sql routing tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_generate_sql_routes_to_metric_when_keyword_present(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_registry: SemanticRegistry,
+) -> None:
+    _patch_generator_llm(monkeypatch, json.dumps(VALID_DSL, ensure_ascii=False))
+    SemanticRegistry._instance = sample_registry
+
+    result = json.loads(await generate_sql.ainvoke({"question": "按 region 汇总 revenue"}))
+
+    assert result["ok"] is True
+    assert result["intent"] == UserIntent.METRIC_ANALYSIS.value
+    assert result["query"]["dataset"] == "sales"
+    assert "SELECT" in result["sql"]
+
+
+@pytest.mark.anyio
+async def test_generate_sql_routes_to_explore_when_no_keyword(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_registry: SemanticRegistry,
+) -> None:
+    expected_sql = "SELECT * FROM db.sales_table LIMIT 5"
+    _patch_nl2sql_llm(monkeypatch, json.dumps({"sql": expected_sql}, ensure_ascii=False))
+    SemanticRegistry._instance = sample_registry
+
+    result = json.loads(await generate_sql.ainvoke({"question": "帮我看看 sales 表里的样例数据"}))
+
+    assert result["ok"] is True
+    assert result["intent"] == UserIntent.FREE_EXPLORATION.value
+    assert result["query"] is None
+    assert result["sql"] == expected_sql
+
+
+@pytest.mark.anyio
+async def test_generate_sql_metric_error_includes_intent(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_registry: SemanticRegistry,
+) -> None:
+    _patch_generator_llm(monkeypatch, "not valid json")
+    SemanticRegistry._instance = sample_registry
+
+    result = json.loads(await generate_sql.ainvoke({"question": "按 region 汇总 revenue"}))
+
+    assert result["ok"] is False
+    assert result["intent"] == UserIntent.METRIC_ANALYSIS.value
+    assert "error" in result
 
 
 __all__ = []

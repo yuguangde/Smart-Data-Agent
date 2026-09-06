@@ -1,4 +1,4 @@
-"""Tests for the metric query execution flow: DSL/SQL -> starrocks_read_query -> final answer."""
+"""Tests for the data question flow: generate_sql -> starrocks_read_query -> final answer."""
 from __future__ import annotations
 
 import asyncio
@@ -35,10 +35,15 @@ _FAKE_RESULT = {
 
 
 @tool
-async def fake_generate_dsl_json(question: str) -> str:
-    """Fake DSL generator that returns a deterministic DSL + SQL payload."""
+async def fake_generate_sql(question: str) -> str:
+    """Fake unified SQL generator that returns a deterministic payload."""
     return json.dumps(
-        {"ok": True, "query": _FAKE_DSL, "sql": _FAKE_SQL},
+        {
+            "ok": True,
+            "intent": "metric_analysis",
+            "query": _FAKE_DSL,
+            "sql": _FAKE_SQL,
+        },
         ensure_ascii=False,
     )
 
@@ -73,8 +78,8 @@ class _FakeLLM:
 def test_system_prompt_mentions_data_query_rule() -> None:
     from app.agent.prompts import build_system_prompt
 
-    prompt = build_system_prompt([fake_generate_dsl_json])
-    assert "数据查询规则" in prompt
+    prompt = build_system_prompt([fake_generate_sql])
+    assert "SQL 生成与数据查询规则" in prompt
     assert "starrocks_read_query" in prompt
     assert "执行返回的 SQL" in prompt
 
@@ -82,7 +87,7 @@ def test_system_prompt_mentions_data_query_rule() -> None:
 # ----------- End-to-end sequence test --------------------------------------
 
 @pytest.mark.anyio
-async def test_metric_question_calls_generate_dsl_then_starrocks(
+async def test_metric_question_calls_generate_sql_then_starrocks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import app.agent.graph as graph_mod
@@ -96,7 +101,7 @@ async def test_metric_question_calls_generate_dsl_then_starrocks(
                 "tool_calls": [
                     {
                         "id": "call_1",
-                        "name": "fake_generate_dsl_json",
+                        "name": "fake_generate_sql",
                         "args": {"question": "按 region 汇总 revenue"},
                     }
                 ],
@@ -126,7 +131,7 @@ async def test_metric_question_calls_generate_dsl_then_starrocks(
     monkeypatch.setattr(
         nodes_mod,
         "get_all_tools",
-        lambda: [fake_generate_dsl_json, fake_starrocks_read_query],
+        lambda: [fake_generate_sql, fake_starrocks_read_query],
     )
     monkeypatch.setattr(
         nodes_mod,
@@ -144,7 +149,7 @@ async def test_metric_question_calls_generate_dsl_then_starrocks(
     )
 
     tool_names = [tc["name"] for tc in result["tool_calls"]]
-    assert tool_names == ["fake_generate_dsl_json", "fake_starrocks_read_query"]
+    assert tool_names == ["fake_generate_sql", "fake_starrocks_read_query"]
 
     content = result["message"]["content"]
     assert "```json" in content

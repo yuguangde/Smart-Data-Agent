@@ -15,6 +15,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import ValidationError
 
 from app.llm.factory import get_llm
+from app.query._utils import _extract_json
 from app.query.dsl import MetricQuery, metric_query_json_schema
 from app.query.registry import SemanticDataset, SemanticRegistry
 
@@ -72,35 +73,6 @@ def _serialize_validation_error(exc: ValidationError) -> str:
         loc = ".".join(str(x) for x in err["loc"])
         parts.append(f"  - {loc}: {err['msg']}")
     return "\n".join(parts)
-
-
-def _extract_json(raw: str) -> str:
-    """Extract JSON from the model output, tolerating markdown code fences.
-
-    Some models add explanatory text before the fenced JSON block. We first
-    look for a ```json ... ``` block, then any ``` ... ``` block, and fall
-    back to the stripped raw text.
-    """
-    cleaned = raw.strip()
-
-    # 1. Prefer an explicitly labelled json fence anywhere in the text.
-    start = cleaned.find("```json")
-    if start != -1:
-        block = cleaned[start:]
-        end = block.find("```", len("```json"))
-        if end != -1:
-            return block[len("```json"):end].strip()
-
-    # 2. Otherwise take the first generic fenced block.
-    start = cleaned.find("```")
-    if start != -1:
-        block = cleaned[start:]
-        end = block.find("```", 3)
-        if end != -1:
-            return block[3:end].strip()
-
-    return cleaned
-
 
 async def generate_metric_query(
     question: str,
