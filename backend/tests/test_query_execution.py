@@ -1,16 +1,49 @@
-"""Tests for the data question flow: generate_sql -> starrocks_read_query -> final answer."""
+"""Tests for the program-driven data-pipeline: generate SQL -> execute -> synthesize."""
 from __future__ import annotations
 
-import asyncio
 import json
+import tempfile
+from pathlib import Path
 from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage
-from langchain_core.tools import tool
+
+from app.query.registry import SemanticRegistry
 
 
-# ----------- Fakes ---------------------------------------------------------
+def _patch_query_nodes_generate_metric_sql(
+    monkeypatch: pytest.MonkeyPatch,
+    result: dict[str, Any],
+) -> None:
+    """Patch the query_nodes module-level wrapper so the graph sees the fake."""
+    import app.agent.query_nodes as qn
+
+    async def fake(question: str) -> dict[str, Any]:
+        return result
+
+    monkeypatch.setattr(qn, "_generate_metric_sql", fake)
+
+
+class _FakeLLM:
+    """Fake LLM used to avoid real network calls during graph tests."""
+
+    def __init__(self, content: str) -> None:
+        self.content = content
+
+    async def ainvoke(self, messages: list[Any], **kwargs: Any) -> AIMessage:
+        return AIMessage(content=self.content)
+
+    def bind_tools(self, tools: list[Any]) -> "_FakeLLM":
+        return self
+
+
+def _patch_llm(monkeypatch: pytest.MonkeyPatch, content: str) -> None:
+    """Patch get_llm in all modules that call it during the data pipeline."""
+    fake = _FakeLLM(content)
+    monkeypatch.setattr("app.agent.query_nodes.get_llm", lambda *args, **kwargs: fake)
+    monkeypatch.setattr("app.agent.nodes.get_llm", lambda *args, **kwargs: fake)
+
 
 _FAKE_DSL = {
     "query_type": "metric",
@@ -33,129 +66,266 @@ _FAKE_RESULT = {
     "rows": [["NORTH", 1200], ["SOUTH", 800]],
 }
 
-
-@tool
-async def fake_generate_sql(question: str) -> str:
-    """Fake unified SQL generator that returns a deterministic payload."""
-    return json.dumps(
-        {
-            "ok": True,
-            "intent": "metric_analysis",
-            "query": _FAKE_DSL,
-            "sql": _FAKE_SQL,
-        },
-        ensure_ascii=False,
-    )
-
-
-@tool
-def fake_starrocks_read_query(query: str, db: str | None = None) -> str:
-    """Fake StarRocks query executor."""
-    return json.dumps(_FAKE_RESULT, ensure_ascii=False)
+_FAKE_YAML = """
+semantic_model:
+  - name: test_model
+    datasets:
+      - name: test_sales
+        source: db.sales_table
+        dimensions:
+          - region
+        metrics:
+          - name: revenue
+            expression: amount
+            default_agg: sum
+"""
 
 
-class _FakeLLM:
-    """Scripted LLM that returns a fixed sequence of AIMessages."""
-
-    def __init__(self, responses: list[dict[str, Any]]) -> None:
-        self._responses = responses
-        self._idx = 0
-
-    async def ainvoke(self, messages: list[Any]) -> AIMessage:
-        resp = self._responses[self._idx]
-        self._idx += 1
-        return AIMessage(
-            content=resp.get("content", ""),
-            tool_calls=resp.get("tool_calls", []),
-        )
-
-    def bind_tools(self, tools: list[Any]) -> "_FakeLLM":
-        return self
+def _make_registry(yaml_content: str) -> SemanticRegistry:
+    tmp = tempfile.TemporaryDirectory()
+    path = Path(tmp.name) / "test.ossie.yml"
+    path.write_text(yaml_content, encoding="utf-8")
+    registry = SemanticRegistry(ossie_dir=path.parent)
+    registry._tmp = tmp  # type: ignore[attr-defined]
+    return registry
 
 
-# ----------- Prompt tests --------------------------------------------------
-
-def test_system_prompt_mentions_data_query_rule() -> None:
-    from app.agent.prompts import build_system_prompt
-
-    prompt = build_system_prompt([fake_generate_sql])
-    assert "SQL 生成与数据查询规则" in prompt
-    assert "starrocks_read_query" in prompt
-    assert "执行返回的 SQL" in prompt
+@pytest.fixture(autouse=True)
+def _reset_registry_singleton() -> None:
+    """Drop any cached registry singleton before each test."""
+    SemanticRegistry._instance = None
+    yield
+    SemanticRegistry._instance = None
 
 
-# ----------- End-to-end sequence test --------------------------------------
+@pytest.fixture
+def _fake_registry() -> SemanticRegistry:
+    registry = _make_registry(_FAKE_YAML)
+    SemanticRegistry._instance = registry
+    return registry
+
+
+async def _fake_generate_metric_sql(_question: str) -> dict[str, Any]:
+    return {"ok": True, "query": _FAKE_DSL, "sql": _FAKE_SQL}
+
+
+async def _fake_execute_read_query(sql: str, db: str = "") -> dict[str, Any]:
+    assert sql == _FAKE_SQL
+    assert db == ""
+    return _FAKE_RESULT
+
 
 @pytest.mark.anyio
-async def test_metric_question_calls_generate_sql_then_starrocks(
+async def test_data_pipeline_executes_sql_and_synthesizes_answer(
     monkeypatch: pytest.MonkeyPatch,
+    _fake_registry: SemanticRegistry,
 ) -> None:
-    import app.agent.graph as graph_mod
-    import app.agent.nodes as nodes_mod
+    """The graph should run generate -> execute -> synthesize without LLM deciding execution."""
+    from app.agent import graph as graph_mod
     from app.services.agent_service import invoke
 
-    scripted_llm = _FakeLLM(
-        [
-            {
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "call_1",
-                        "name": "fake_generate_sql",
-                        "args": {"question": "按 region 汇总 revenue"},
-                    }
-                ],
-            },
-            {
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "call_2",
-                        "name": "fake_starrocks_read_query",
-                        "args": {"query": _FAKE_SQL},
-                    }
-                ],
-            },
-            {
-                "content": (
-                    "以下是查询结果：\n\n"
-                    "```json\n" + json.dumps(_FAKE_DSL, ensure_ascii=False) + "\n```\n\n"
-                    "```sql\n" + _FAKE_SQL + "\n```\n\n"
-                    "| region | revenue |\n|---|---|\n| NORTH | 1200 |\n| SOUTH | 800 |\n\n"
-                    "NORTH 区域收入最高。"
-                ),
-            },
-        ]
-    )
-
-    monkeypatch.setattr(
-        nodes_mod,
-        "get_all_tools",
-        lambda: [fake_generate_sql, fake_starrocks_read_query],
+    _patch_query_nodes_generate_metric_sql(
+        monkeypatch,
+        {"ok": True, "query": _FAKE_DSL, "sql": _FAKE_SQL},
     )
     monkeypatch.setattr(
-        nodes_mod,
-        "get_llm",
-        lambda *args, **kwargs: scripted_llm,
+        "app.agent.executor.execute_read_query",
+        _fake_execute_read_query,
+    )
+    _patch_llm(
+        monkeypatch,
+        content=f"SQL: {_FAKE_SQL}\n\n结果：NORTH 1200，SOUTH 800",
     )
 
-    # Clear the compiled-graph cache so the next invocation rebuilds with fakes.
     graph_mod.get_compiled_graph.cache_clear()
 
     result = await invoke(
         user_message="按 region 汇总 revenue",
         user_id="test",
-        thread_id="test-thread",
+        thread_id="test-data-pipeline",
     )
 
-    tool_names = [tc["name"] for tc in result["tool_calls"]]
-    assert tool_names == ["fake_generate_sql", "fake_starrocks_read_query"]
+    content = result["message"]["content"]
+    assert _FAKE_SQL in content
+    assert "NORTH" in content
+    assert "1200" in content
+
+
+@pytest.mark.anyio
+async def test_data_pipeline_handles_execution_error(
+    monkeypatch: pytest.MonkeyPatch,
+    _fake_registry: SemanticRegistry,
+) -> None:
+    """If SQL execution fails, the synthesizer should explain the error without crashing."""
+    from app.agent import graph as graph_mod
+    from app.services.agent_service import invoke
+
+    async def failing_executor(_sql: str, _db: str = "") -> dict[str, Any]:
+        raise RuntimeError("connection refused")
+
+    _patch_query_nodes_generate_metric_sql(
+        monkeypatch,
+        {"ok": True, "query": _FAKE_DSL, "sql": _FAKE_SQL},
+    )
+    monkeypatch.setattr(
+        "app.agent.executor.execute_read_query",
+        failing_executor,
+    )
+    _patch_llm(
+        monkeypatch,
+        content=f"SQL 执行失败：connection refused\n\nSQL：{_FAKE_SQL}",
+    )
+
+    graph_mod.get_compiled_graph.cache_clear()
+
+    result = await invoke(
+        user_message="按 region 汇总 revenue",
+        user_id="test",
+        thread_id="test-exec-error",
+    )
 
     content = result["message"]["content"]
-    assert "```json" in content
-    assert "```sql" in content
+    assert _FAKE_SQL in content
+    assert "执行" in content or "失败" in content or "不可用" in content
+
+
+@pytest.mark.anyio
+async def test_data_pipeline_skips_execution_on_generation_error(
+    monkeypatch: pytest.MonkeyPatch,
+    _fake_registry: SemanticRegistry,
+) -> None:
+    """When SQL generation fails, execute_sql_node should not be reached."""
+    from app.agent import graph as graph_mod
+    from app.services.agent_service import invoke
+
+    executor_called = False
+
+    async def tracking_executor(_sql: str, _db: str = "") -> dict[str, Any]:
+        nonlocal executor_called
+        executor_called = True
+        return _FAKE_RESULT
+
+    _patch_query_nodes_generate_metric_sql(
+        monkeypatch,
+        {"ok": False, "query": None, "error": "无法识别指标"},
+    )
+    monkeypatch.setattr(
+        "app.agent.executor.execute_read_query",
+        tracking_executor,
+    )
+    _patch_llm(monkeypatch, content="生成失败，请补充信息")
+
+    graph_mod.get_compiled_graph.cache_clear()
+
+    result = await invoke(
+        user_message="按 region 汇总 revenue",
+        user_id="test",
+        thread_id="test-gen-error",
+    )
+
+    assert not executor_called
+    assert "失败" in result["message"]["content"] or "补充" in result["message"]["content"]
+
+
+@pytest.mark.anyio
+async def test_data_pipeline_hil_approval_runs_sql(
+    monkeypatch: pytest.MonkeyPatch,
+    _fake_registry: SemanticRegistry,
+) -> None:
+    """With HITL enabled, approving the SQL review should execute the query."""
+    from app.agent import graph as graph_mod
+    from app.config import get_settings
+    from app.services.agent_service import invoke
+
+    _patch_query_nodes_generate_metric_sql(
+        monkeypatch,
+        {"ok": True, "query": _FAKE_DSL, "sql": _FAKE_SQL},
+    )
+    monkeypatch.setattr(
+        "app.agent.executor.execute_read_query",
+        _fake_execute_read_query,
+    )
+    _patch_llm(
+        monkeypatch,
+        content=f"SQL: {_FAKE_SQL}\n\n结果：NORTH 1200，SOUTH 800",
+    )
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "hitl", True)
+
+    graph_mod.get_compiled_graph.cache_clear()
+
+    thread_id = "test-hil-approved"
+    first = await invoke(
+        user_message="按 region 汇总 revenue",
+        user_id="test",
+        thread_id=thread_id,
+    )
+    assert first.get("pending_approval")
+    assert first["pending_approval"]["type"] == "sql_approval"
+    assert _FAKE_SQL in first["pending_approval"]["sql"]
+
+    resumed = await invoke(
+        user_message="",
+        thread_id=thread_id,
+        resume={"approved": True},
+    )
+    content = resumed["message"]["content"]
+    assert _FAKE_SQL in content
     assert "NORTH" in content
-    assert _FAKE_SQL.splitlines()[1].strip() in content
+
+
+@pytest.mark.anyio
+async def test_data_pipeline_hil_denial_skips_execution(
+    monkeypatch: pytest.MonkeyPatch,
+    _fake_registry: SemanticRegistry,
+) -> None:
+    """With HITL enabled, denying the SQL review should synthesize a denial answer."""
+    from app.agent import graph as graph_mod
+    from app.config import get_settings
+    from app.services.agent_service import invoke
+
+    executor_called = False
+
+    async def tracking_executor(_sql: str, _db: str = "") -> dict[str, Any]:
+        nonlocal executor_called
+        executor_called = True
+        return _FAKE_RESULT
+
+    _patch_query_nodes_generate_metric_sql(
+        monkeypatch,
+        {"ok": True, "query": _FAKE_DSL, "sql": _FAKE_SQL},
+    )
+    monkeypatch.setattr(
+        "app.agent.executor.execute_read_query",
+        tracking_executor,
+    )
+    _patch_llm(
+        monkeypatch,
+        content="用户未授权执行该 SQL，因此无法返回数据。",
+    )
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "hitl", True)
+
+    graph_mod.get_compiled_graph.cache_clear()
+
+    thread_id = "test-hil-denied"
+    first = await invoke(
+        user_message="按 region 汇总 revenue",
+        user_id="test",
+        thread_id=thread_id,
+    )
+    assert first.get("pending_approval")
+    assert first["pending_approval"]["type"] == "sql_approval"
+
+    resumed = await invoke(
+        user_message="",
+        thread_id=thread_id,
+        resume={"approved": False},
+    )
+    assert not executor_called
+    assert "未授权" in resumed["message"]["content"] or "无法" in resumed["message"]["content"]
 
 
 __all__ = []

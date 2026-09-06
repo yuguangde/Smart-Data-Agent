@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
@@ -31,6 +32,41 @@ class DateDialect(StrEnum):
 # ---------------------------------------------------------------------------
 
 _AGG_RE = re.compile(r"\b(COUNT|SUM|AVG|MIN|MAX)\s*\(", re.IGNORECASE)
+
+# Java SimpleDateFormat → Python strftime mapping for common date parts.
+_JAVA_TO_STRFTIME = {
+    "yyyy": "%Y",
+    "MM": "%m",
+    "dd": "%d",
+    "HH": "%H",
+    "mm": "%M",
+    "ss": "%S",
+}
+
+
+def _java_date_format_to_strftime(java_fmt: str) -> str:
+    """Convert a Java/SimpleDateFormat pattern to Python strftime format."""
+    result = java_fmt
+    # Sort keys by length descending so multi-char patterns are replaced first.
+    for java_pat, py_pat in sorted(_JAVA_TO_STRFTIME.items(), key=lambda x: -len(x[0])):
+        result = result.replace(java_pat, py_pat)
+    return result
+
+
+def _format_date_for_dimension(iso_date: str, fmt: str | None) -> str:
+    """Convert an ISO date (YYYY-MM-DD) to the target column format.
+
+    If ``fmt`` is a Python strftime string (contains ``%``), use it directly.
+    Otherwise treat it as a Java/SimpleDateFormat pattern.
+    """
+    if not fmt:
+        return iso_date
+    try:
+        dt = datetime.strptime(iso_date, "%Y-%m-%d")
+    except ValueError:
+        return iso_date
+    py_fmt = fmt if "%" in fmt else _java_date_format_to_strftime(fmt)
+    return dt.strftime(py_fmt)
 
 
 def _quote(value: Any) -> str:
@@ -218,7 +254,7 @@ class MetricQueryRenderer:
         dimensions: list[tuple[str, str]] = []
         selected_dim_names = list(dict.fromkeys(query.dimensions))
         for dim_name in selected_dim_names:
-            if dim_name not in dataset.dimensions:
+            if dim_name not in dataset.dimension_names:
                 # Best-effort: allow it if it is a selected metric name (rare case).
                 if dim_name not in {rm.name for rm in rendered_metrics}:
                     raise RenderError(
@@ -251,10 +287,18 @@ class MetricQueryRenderer:
 
         time_range_data: dict[str, Any] | None = None
         if query.time_range:
+            time_dim = self.registry.get_dimension(
+                query.dataset, query.time_range.field
+            )
+            target_format = time_dim.format if time_dim else None
             time_range_data = {
                 "field": query.time_range.field,
-                "start": query.time_range.start,
-                "end": query.time_range.end,
+                "start": _format_date_for_dimension(
+                    query.time_range.start, target_format
+                ),
+                "end": _format_date_for_dimension(
+                    query.time_range.end, target_format
+                ),
             }
 
         return self._template.render(

@@ -209,7 +209,6 @@ def _aggregate_tool_calls(values: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def make_initial_state(
-    thread_id: str,
     user_message: str,
     user_id: str,
     metadata: dict[str, Any],
@@ -243,7 +242,7 @@ async def invoke(
     config = {"configurable": {"thread_id": thread_id, "user_id": user_id}}
 
     if resume is None:
-        input_value = make_initial_state(thread_id, user_message, user_id, metadata or {})
+        input_value = make_initial_state(user_message, user_id, metadata or {})
     else:
         input_value = Command(resume=resume)
 
@@ -282,7 +281,7 @@ async def stream_events(
 ) -> AsyncIterator[dict[str, Any]]:
     """Yield SSE-friendly events describing the agent run.
 
-    Schema: ``{"event": "message|token|tool_start|tool_end|done|error|tool_approval", "data": ...}``
+    Schema: ``{"event": "message|token|tool_start|tool_end|done|error|tool_approval|sql_approval", "data": ...}``
 
     If ``resume`` is provided, the graph is resumed from a prior interrupt
     (e.g. user approval for a sensitive tool call) instead of starting a new turn.
@@ -292,7 +291,7 @@ async def stream_events(
     config = {"configurable": {"thread_id": thread_id, "user_id": user_id}}
 
     if resume is None:
-        input_value = make_initial_state(thread_id, user_message or "", user_id, metadata or {})
+        input_value = make_initial_state(user_message or "", user_id, metadata or {})
         yield {"event": "message", "data": {"thread_id": thread_id}}
     else:
         input_value = Command(resume=resume)
@@ -304,6 +303,13 @@ async def stream_events(
             data = ev.get("data", {}) or {}
 
             if kind == "on_chat_model_stream":
+                # Only stream tokens from the final assistant or synthesizer.
+                # Internal LLM calls (e.g. DSL generation inside generate_sql)
+                # would otherwise leak raw JSON into the chat bubble.
+                metadata = ev.get("metadata", {})
+                node = metadata.get("langgraph_node")
+                if node not in ("agent", "synthesize"):
+                    continue
                 chunk = data.get("chunk")
                 if chunk is None:
                     continue
@@ -377,7 +383,14 @@ async def stream_events(
     if interrupts:
         payload = interrupts[0].value if hasattr(interrupts[0], "value") else interrupts[0]
         payload = payload if isinstance(payload, dict) else {}
-        yield {"event": "tool_approval", "data": payload}
+        yield {"event": _approval_event_name(payload), "data": payload}
+
+
+def _approval_event_name(payload: dict[str, Any] | None) -> str:
+    """Map an interrupt payload to the SSE event name exposed to clients."""
+    if isinstance(payload, dict):
+        return str(payload.get("type", "tool_approval"))
+    return "tool_approval"
 
 
 async def get_history(thread_id: str) -> list[dict[str, Any]]:

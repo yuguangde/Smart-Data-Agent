@@ -19,5 +19,20 @@ class AgentState(MessagesState):
     iterations: int = 0
     final_answer: str = ""
 
+    # Data-pipeline fields (program-driven SQL generation & execution)
+    is_data_question: bool | None = None
+    intent: str | None = None  # metric_analysis / free_exploration
+    dsl: dict[str, Any] | None = None
+    sql: str | None = None
+    query_error: str | None = None
+    execution_result: dict[str, Any] | None = None
+    execution_error: str | None = None
+
+    # General-agent fields
+    pending_tool_calls: list[dict[str, Any]] | None = None
+
+    # Follow-up handling
+    is_metric_followup: bool | None = None
+
 
 __all__ = ["AgentState"]

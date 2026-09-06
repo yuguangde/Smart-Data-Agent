@@ -93,6 +93,7 @@ def create_app() -> FastAPI:
                 "status": "ok",
                 "llm_provider": settings.llm_provider.value,
                 "checkpointer": settings.checkpointer.value,
+                "hitl": settings.hitl,
             }
         )
 

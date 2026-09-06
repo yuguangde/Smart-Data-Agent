@@ -121,7 +121,7 @@ class Settings(BaseSettings):
     # -------- Behavior --------
     hitl: bool = Field(
         default=False,
-        description="Enable Human-in-the-Loop interrupt before agent node.",
+        description="Enable Human-in-the-Loop SQL review before executing generated SQL.",
     )
 
     query_sql_dialect: str = Field(

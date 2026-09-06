@@ -276,3 +276,39 @@ def test_filter_in_operator(sample_registry: SemanticRegistry) -> None:
         sample_registry,
     )
     assert "region IN ('NORTH', 'SOUTH')" in sql
+
+
+def test_time_range_respects_dimension_date_format() -> None:
+    """When a dimension declares yyyyMMdd format, ISO dates must be converted."""
+    yaml = """
+semantic_model:
+  - name: test_model
+    datasets:
+      - name: sales
+        source: db.sales_table
+        dimensions:
+          - name: dt
+            data_type: string
+            format: yyyyMMdd
+            is_time: true
+        metrics:
+          - name: revenue
+            expression: amount
+            default_agg: sum
+"""
+    registry = _make_registry(yaml)
+    sql = _render(
+        {
+            "dataset": "sales",
+            "metrics": [{"name": "revenue", "agg": "sum"}],
+            "time_range": {
+                "field": "dt",
+                "start": "2026-08-01",
+                "end": "2026-08-31",
+            },
+        },
+        registry,
+    )
+    assert "dt >= '20260801'" in sql
+    assert "dt <= '20260831'" in sql
+    assert "dt >= '2026-08-01'" not in sql

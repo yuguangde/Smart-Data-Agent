@@ -398,7 +398,8 @@ export function useChatStore(): ChatStore {
               });
               break;
             }
-            case "tool_approval": {
+            case "tool_approval":
+            case "sql_approval": {
               dispatch({
                 type: "SET_PENDING_APPROVAL",
                 pending: true,

@@ -1,0 +1,36 @@
+graph TD
+    START([__start__]) --> router
+    router -->|数据问题| generate_sql
+    router -->|通用问题| agent
+    router -->|未知/空| END([__end__])
+
+    generate_sql -->|sql OK + hitl=true| data_review
+    generate_sql -->|sql OK + hitl=false| execute_sql
+    generate_sql -->|sql 生成失败| synthesize
+
+    data_review -->|approved=true| execute_sql
+    data_review -->|approved=false| synthesize
+
+    execute_sql --> synthesize
+    synthesize --> END
+
+    agent -->|max_iterations 到达| END
+    agent --> marshal_tools
+
+    marshal_tools -->|pending sensitive tool_calls| review
+    marshal_tools -->|有非敏感 tool_calls| tools
+    marshal_tools -->|无 tool_calls| END
+
+    review -->|approved=true| tools
+    review -->|approved=false| agent
+
+    tools --> agent
+
+    classDef startEnd fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef dataNode fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+    classDef agentNode fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
+    classDef hilNode fill:#fce4ec,stroke:#c2185b,stroke-width:2px
+    class START,END startEnd
+    class router,generate_sql,data_review,execute_sql,synthesize dataNode
+    class agent,marshal_tools,review,tools agentNode
+    class data_review,review hilNode

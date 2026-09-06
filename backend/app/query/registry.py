@@ -83,14 +83,29 @@ class SemanticMetric:
 
 
 @dataclass
+class SemanticDimension:
+    """A dimension (column) exposed by the semantic layer."""
+
+    name: str
+    data_type: str = "string"
+    format: str | None = None
+    description: str | None = None
+    is_time: bool = False
+
+
+@dataclass
 class SemanticDataset:
     """A dataset (source table/view) exposed by the semantic layer."""
 
     name: str
     source: str
     model_name: str
-    dimensions: list[str] = field(default_factory=list)
+    dimensions: list[SemanticDimension] = field(default_factory=list)
     metrics: list[SemanticMetric] = field(default_factory=list)
+
+    @property
+    def dimension_names(self) -> list[str]:
+        return [d.name for d in self.dimensions]
 
     @property
     def metric_names(self) -> list[str]:
@@ -154,8 +169,9 @@ class SemanticRegistry:
                 description=raw_model.get("description"),
             )
 
-            # Metrics can live at model level (current format) or dataset level.
+            # Metrics and dimensions can live at model level and/or dataset level.
             model_metrics = self._parse_metrics(raw_model.get("metrics", []))
+            model_dimensions = self._parse_dimensions(raw_model.get("dimensions", []))
 
             raw_datasets = raw_model.get("datasets", [])
             if isinstance(raw_datasets, dict):
@@ -167,9 +183,15 @@ class SemanticRegistry:
                     ds_metrics = self._parse_metrics(raw_ds["metrics"])
                 else:
                     ds_metrics = list(model_metrics)
-                declared_dims = raw_ds.get("dimensions") or []
-                inferred_dims = self._infer_dimensions(ds_metrics)
-                dimensions = [d for d in declared_dims if d] or inferred_dims
+
+                ds_dimensions = self._parse_dimensions(
+                    raw_ds.get("dimensions") or []
+                )
+                declared_dims = model_dimensions + ds_dimensions
+                inferred_dim_names = self._infer_dimensions(ds_metrics)
+                dimensions = declared_dims or [
+                    SemanticDimension(name=n) for n in inferred_dim_names
+                ]
 
                 dataset = SemanticDataset(
                     name=ds_name,
@@ -191,7 +213,9 @@ class SemanticRegistry:
                         )
                     self._metrics[metric.name] = metric
 
-                self._dimensions.setdefault(ds_name, set()).update(dimensions)
+                self._dimensions.setdefault(ds_name, set()).update(
+                    dataset.dimension_names
+                )
 
             self._models[model_name] = model
 
@@ -228,6 +252,27 @@ class SemanticRegistry:
             )
         return result
 
+    @staticmethod
+    def _parse_dimensions(raw_dimensions: list[Any]) -> list[SemanticDimension]:
+        """Parse declared dimensions, tolerating both strings and objects."""
+        result: list[SemanticDimension] = []
+        for raw in raw_dimensions:
+            if isinstance(raw, str):
+                result.append(SemanticDimension(name=raw))
+            elif isinstance(raw, dict):
+                result.append(
+                    SemanticDimension(
+                        name=raw.get("name", ""),
+                        data_type=raw.get("data_type", "string"),
+                        format=raw.get("format"),
+                        description=raw.get("description"),
+                        is_time=bool(raw.get("is_time", False)),
+                    )
+                )
+            else:
+                logger.warning("Ignoring unknown dimension declaration: %s", raw)
+        return result
+
     def _infer_dimensions(self, metrics: list[SemanticMetric]) -> list[str]:
         """Infer candidate dimension fields from metric expressions/filters."""
         candidates: list[str] = []
@@ -260,8 +305,18 @@ class SemanticRegistry:
     def get_metric(self, name: str) -> SemanticMetric | None:
         return self._metrics.get(name)
 
+    def get_dimension(self, dataset_name: str, field: str) -> SemanticDimension | None:
+        """Return the declared dimension metadata for ``field`` in ``dataset``."""
+        ds = self._datasets.get(dataset_name)
+        if ds is None:
+            return None
+        for dim in ds.dimensions:
+            if dim.name == field:
+                return dim
+        return None
+
     def get_dimensions(self, dataset_name: str) -> set[str]:
-        return set(self._dimensions.get(dataset_name, []))
+        return set(self._dimensions.get(dataset_name, set()))
 
     def is_valid_metric(self, name: str) -> bool:
         return name in self._metrics
@@ -275,7 +330,7 @@ class SemanticRegistry:
         for ds in self.datasets.values():
             lines.append(f"数据集: {ds.name} (source: {ds.source})")
             lines.append(f"  可用指标: {', '.join(ds.metric_names) or '(none)'}")
-            lines.append(f"  可用维度: {', '.join(sorted(ds.dimensions)) or '(none)'}")
+            lines.append(f"  可用维度: {', '.join(sorted(ds.dimension_names)) or '(none)'}")
         return "\n".join(lines)
 
 
@@ -284,4 +339,5 @@ __all__ = [
     "SemanticModel",
     "SemanticDataset",
     "SemanticMetric",
+    "SemanticDimension",
 ]

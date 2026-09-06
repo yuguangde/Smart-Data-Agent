@@ -16,13 +16,22 @@ semantic_model:
         filter: is_common_calc = 1 AND channel <> 'FAQ'
       - name: 按键评价量
         expression:
-          dialect: ANSI_SQL
-          expression: |
-            COUNT(DISTINCT IF(is_online_sat = '1', router_id, NULL))
+          dialects:
+            - dialect: ANSI_SQL
+              expression: |
+                COUNT(DISTINCT IF(is_online_sat = '1', router_id, NULL))
         filter: is_common_calc = 1 AND channel <> 'FAQ'
       - name: 按键评价满意量
         expression:
-          dialect: ANSI_SQL
-          expression: |
-            COUNT(DISTINCT IF(is_online_sat_satisfaction = '1', router_id, NULL))
+          dialects:
+            - dialect: ANSI_SQL
+              expression: |
+                COUNT(DISTINCT IF(is_online_sat_satisfaction = '1', router_id, NULL))
         filter: is_common_calc = 1 AND channel <> 'FAQ'
+    dimensions:
+      - name: dt
+        data_type: string
+        format: yyyyMMdd
+        display_name: 业务日期
+        description: 业务日期，分区字段，格式 yyyyMMdd
+        is_time: true

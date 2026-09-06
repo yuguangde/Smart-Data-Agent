@@ -47,7 +47,7 @@ def _dataset_context(dataset: SemanticDataset) -> str:
     lines = [
         f"数据集: {dataset.name} (source: {dataset.source})",
         f"  可用指标: {', '.join(dataset.metric_names) or '(none)'}",
-        f"  可用维度: {', '.join(sorted(dataset.dimensions)) or '(none)'}",
+        f"  可用维度: {', '.join(sorted(dataset.dimension_names)) or '(none)'}",
     ]
     return "\n".join(lines)
 

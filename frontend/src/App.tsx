@@ -16,7 +16,17 @@ import {
   RobotOutlined,
 } from "@ant-design/icons";
 import { Welcome } from "@ant-design/x";
-import { Alert, ConfigProvider, Layout, Space, Tag, Typography, theme } from "antd";
+import {
+  Alert,
+  ConfigProvider,
+  Layout,
+  Space,
+  Tag,
+  Tooltip,
+  Typography,
+  message,
+  theme,
+} from "antd";
 import zhCN from "antd/locale/zh_CN";
 import "antd/dist/reset.css";
 
@@ -72,9 +82,25 @@ export default function App() {
             <Tag icon={<ApiOutlined />} color="cyan">
               SSE
             </Tag>
-            <Text style={{ color: "rgba(255,255,255,0.85)" }}>
-              {threadId ? `thread: ${threadId.slice(0, 8)}…` : "尚未开启会话"}
-            </Text>
+            <Tooltip title={threadId || "尚未开启会话"} placement="bottom">
+              <Text
+                style={{
+                  color: "rgba(255,255,255,0.85)",
+                  cursor: threadId ? "pointer" : "default",
+                }}
+                onDoubleClick={async () => {
+                  if (!threadId) return;
+                  try {
+                    await navigator.clipboard.writeText(threadId);
+                    message.success("Thread ID 已复制");
+                  } catch {
+                    message.error("复制失败");
+                  }
+                }}
+              >
+                {threadId ? `thread: ${threadId.slice(0, 8)}…` : "尚未开启会话"}
+              </Text>
+            </Tooltip>
             <a
               href="https://github.com/anthropics/claude-code"
               target="_blank"

@@ -1,16 +1,17 @@
-"""Graph nodes: agent (LLM) and the ToolNode runner."""
+"""Graph nodes: agent (LLM), tool marshal, and the ToolNode runner."""
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from langchain_core.messages import AIMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 from langgraph.prebuilt import ToolNode
 
 from app.agent.prompts import build_system_prompt
+from app.agent.review import SENSITIVE_TOOL_NAMES
 from app.agent.state import AgentState
 from app.llm.factory import get_llm
-from app.tools import get_all_tools
+from app.tools import get_llm_tools, get_program_only_tool_names
 
 if TYPE_CHECKING:
     from langchain_core.language_models import BaseChatModel
@@ -19,12 +20,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-_MODULE_SIG: tuple | None = None
-_GRAPH_CACHE: dict[str, object] = {}
-
-
 def _build_model_with_tools() -> tuple["BaseChatModel", list["BaseTool"]]:
-    tools = get_all_tools()
+    tools = get_llm_tools()
     chat = get_llm(with_tools=tools)
     return chat, tools
 
@@ -37,11 +34,29 @@ def current_tool_signature() -> tuple:
     tools at startup), ``make_agent_node_cache_key`` flips and the cached
     compiled graph in ``graph.build_graph()`` is invalidated.
     """
-    return tuple(sorted(t.name for t in get_all_tools()))
+    return tuple(sorted(t.name for t in get_llm_tools()))
+
+
+async def _call_llm(
+    state: AgentState,
+    chat: "BaseChatModel",
+    system_prompt: str,
+) -> AIMessage:
+    """Run the LLM with the system prompt injected on the first turn."""
+    messages = state["messages"]
+    # Inject system prompt exactly once, at the front.
+    if not messages or not isinstance(messages[0], SystemMessage):
+        messages = [SystemMessage(content=system_prompt), *messages]
+        state["messages"] = messages
+
+    # Use async invoke so LangGraph's astream_events() emits per-token
+    # ``on_chat_model_stream`` events; the sync .invoke() blocks the event
+    # loop and causes ``message → done → end`` with zero ``token`` frames.
+    return await chat.ainvoke(messages)
 
 
 def make_agent_node():
-    """Return a node that calls the LLM, injecting the system prompt on the first turn.
+    """Return the agent LLM node, the ToolNode runner, and the tool marshal node.
 
     Each invocation rebuilds ``chat`` only if env / settings changed; tools are
     unchanged across turns. We accept the small overhead rather than reaching
@@ -50,25 +65,100 @@ def make_agent_node():
     """
     chat, tools = _build_model_with_tools()
     tool_node = ToolNode(tools)
+    marshal_node = make_marshal_node()
     system_prompt = build_system_prompt(tools)
 
     async def agent_node(state: AgentState) -> AgentState:
-        messages = state["messages"]
-        # Inject system prompt exactly once, at the front.
-        if not messages or not isinstance(messages[0], SystemMessage):
-            messages = [SystemMessage(content=system_prompt), *messages]
-            state["messages"] = messages
-
-        # Use async invoke so LangGraph's astream_events() emits per-token
-        # ``on_chat_model_stream`` events; the sync .invoke() blocks the event
-        # loop and causes ``message → done → end`` with zero ``token`` frames.
-        response: AIMessage = await chat.ainvoke(messages)
+        response: AIMessage = await _call_llm(state, chat, system_prompt)
         return {
             "messages": [response],
             "iterations": state.get("iterations", 0) + 1,
         }
 
-    return agent_node, tool_node
+    return agent_node, tool_node, marshal_node
 
 
-__all__ = ["make_agent_node", "current_tool_signature"]
+def make_marshal_node():
+    """Return a node that validates and routes LLM-produced tool calls.
+
+    The LLM only reasons about which tools to call; this node enforces the
+    boundary between reasoning and execution:
+
+    - Filters out program-only tools (e.g. ``starrocks_read_query``) so the
+      agent can never bypass the data pipeline or the SQL executor.
+    - Detects sensitive tools (e.g. ``read_file``) and pauses the graph by
+      storing the pending calls in ``pending_tool_calls`` for HIL review.
+    - Leaves non-sensitive calls in the last assistant message so ToolNode can
+      execute them directly.
+    """
+    program_only = get_program_only_tool_names()
+    sensitive = SENSITIVE_TOOL_NAMES
+
+    def _rewrite_last_ai(
+        messages: list[BaseMessage],
+        tool_calls: list[dict[str, Any]] | None,
+    ) -> list[BaseMessage]:
+        """Replace the last AIMessage with a copy whose tool_calls are updated."""
+        if not messages:
+            return messages
+        last_msg = messages[-1]
+        if not isinstance(last_msg, AIMessage):
+            return messages
+        messages[-1] = AIMessage(
+            content=last_msg.content,
+            id=last_msg.id,
+            tool_calls=tool_calls or [],
+            additional_kwargs=last_msg.additional_kwargs,
+        )
+        return messages
+
+    async def marshal_node(state: AgentState) -> dict[str, Any]:
+        messages = list(state.get("messages", []))
+        if not messages:
+            return {"pending_tool_calls": None}
+
+        last_msg = messages[-1]
+        if not isinstance(last_msg, AIMessage):
+            return {"pending_tool_calls": None}
+
+        tool_calls = list(getattr(last_msg, "tool_calls", None) or [])
+        if not tool_calls:
+            return {"pending_tool_calls": None}
+
+        # Defensive filter: the LLM should never see program-only tools, but
+        # guard against misconfiguration that exposes them.
+        allowed_calls = [
+            tc for tc in tool_calls if tc.get("name") not in program_only
+        ]
+        filtered = [tc for tc in tool_calls if tc.get("name") in program_only]
+        if filtered:
+            logger.warning(
+                "Filtered program-only tool calls the LLM should not have produced: %s",
+                [tc.get("name") for tc in filtered],
+            )
+
+        if not allowed_calls:
+            return {
+                "messages": _rewrite_last_ai(messages, []),
+                "pending_tool_calls": None,
+            }
+
+        sensitive_calls = [tc for tc in allowed_calls if tc.get("name") in sensitive]
+        if sensitive_calls:
+            # Erase tool_calls from the assistant message so ToolNode will not
+            # execute them until the review node restores them.
+            return {
+                "messages": _rewrite_last_ai(messages, []),
+                "pending_tool_calls": allowed_calls,
+            }
+
+        # Non-sensitive calls: proceed straight to ToolNode.
+        return {
+            "messages": _rewrite_last_ai(messages, allowed_calls),
+            "pending_tool_calls": None,
+        }
+
+    return marshal_node
+
+
+__all__ = ["make_agent_node", "current_tool_signature", "make_marshal_node"]
