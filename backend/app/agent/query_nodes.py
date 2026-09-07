@@ -13,6 +13,13 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.agent.executor import execute_read_query
+from app.agent.prompts import (
+    DATA_REFLECTION_SYSTEM_PROMPT,
+    FINAL_SYNTHESIZE_SYSTEM_PROMPT,
+    FOLLOWUP_SYSTEM_PROMPT,
+    ROUTER_SYSTEM_PROMPT,
+    SYNTHESIZE_SYSTEM_PROMPT,
+)
 from app.agent.state import AgentState
 from app.config import get_settings
 from app.llm.factory import get_llm
@@ -23,70 +30,25 @@ from app.query.nl2sql import generate_nl_sql
 logger = logging.getLogger(__name__)
 
 
-_ROUTER_SYSTEM_PROMPT = """\
-你是 Smart Data Agent 的意图识别助手，只负责判断用户问题是否涉及数据分析或 SQL 查询。
-
-数据问题包括：
-- 指标、统计、趋势、聚合类问题（如“最近7天各渠道智能服务量是多少”）。
-- 针对数据库表的自由探索（如“帮我看看最近有哪些用户登录过”）。
-- 明显要求生成 SQL 或查询数据的请求。
-- 对前一条数据查询的跟进，例如“按天拆分下”、“按渠道分组看看”、“继续细化”。
-
-非数据问题包括：闲聊、问候、通用知识问答、不涉及任何表/指标的问题。
-
-请 ONLY 输出一个 JSON 对象，不要带解释或 markdown 代码块：
-{"is_data_question": true}
-或
-{"is_data_question": false}
-"""
-
-
-_FOLLOWUP_SYSTEM_PROMPT = """\
-你是 Smart Data Agent 的指标查询改写助手。
-
-上一轮用户已经通过语义层指标 DSL 完成了一个数据查询，上一轮的 DSL 如下：
-
-```json
-{previous_dsl}
-```
-
-上一轮生成的 SQL 如下：
-
-```sql
-{previous_sql}
-```
-
-本轮用户的跟进请求是：
-{question}
-
-请基于上一轮 DSL，在保持 dataset 和 metrics 不变的前提下，修改以下部分并生成新的 DSL JSON：
-- 如果要求按天/按周/按月拆分，请添加对应的 dimensions 或设置 time_range.grain。
-- 如果要求按某个维度分组，请在 dimensions 中添加该维度。
-- 如果要求筛选、排序或限制，请调整 filters / order_by / limit。
-- 如果要求对比不同时间范围，请调整 time_range.start / time_range.end。
-
-请 ONLY 输出一个 JSON 对象，不要带解释或 markdown 代码块。DSL 必须符合 MetricQuery Schema。
-"""
-
-
-_SYNTHESIZE_SYSTEM_PROMPT = """\
-你是 Smart Data Agent 的结果合成助手。你会收到一个 JSON 上下文，包含用户问题、数据意图、DSL（metric 场景）、SQL、以及执行结果或错误信息。
-
-你的任务是根据上下文生成一个友好、专业、准确的中文最终回答。
-
-规则：
-1. 如果意图是 metric_analysis，先用 `json` 代码块展示 DSL，再用 `sql` 代码块展示 SQL。
-2. 如果意图是 free_exploration，只需用 `sql` 代码块展示 SQL，不需要展示 DSL。
-3. 如果执行成功，用 Markdown 表格展示 execution_result 中的关键数据（最多 20 行），并给出简短解读。
-4. 如果执行失败或没有 execution_result，说明“SQL 执行不可用或失败”，展示 SQL 方便排查，不要编造数据。
-5. 如果 DSL/SQL 生成失败，说明失败原因，并询问用户是否需要补充信息或换种方式提问。
-6. 如果 is_data_question 为 false，则作为普通对话回答，不需要展示 SQL。
-
-语气：友好、专业、不谄媚。
-"""
-
-
-_FOLLOWUP_KEYWORDS = {"拆分", "分组", "维度", "按", "继续", "细化", "趋势", "每天", "天", "周", "月", "渠道"}
+_FOLLOWUP_KEYWORDS = {
+    "拆分",
+    "分组",
+    "维度",
+    "按",
+    "继续",
+    "细化",
+    "趋势",
+    "每天",
+    "天",
+    "周",
+    "月",
+    "渠道",
+    # Chart / visualization follow-ups on the previous metric result.
+    "图",
+    "折线",
+    "绘制",
+    "画",
+}
 
 
 def _last_user_message(state: AgentState) -> str:
@@ -98,17 +60,54 @@ def _last_user_message(state: AgentState) -> str:
     return ""
 
 
-def _second_last_user_message(state: AgentState) -> str:
-    """Return the second most recent HumanMessage content, or empty string."""
-    found_last = False
-    for msg in reversed(state.get("messages", [])):
+def _current_data_question(state: AgentState) -> str:
+    """Return the active data question.
+
+    During a multi-step analysis loop, ``refined_question`` takes precedence
+    over the last user message so the next SQL targets the planned sub-query.
+    """
+    return state.get("refined_question") or _last_user_message(state)
+
+
+def _format_collected_results(results: list[dict[str, Any]]) -> str:
+    """Format collected execution results for LLM prompts."""
+    if not results:
+        return "暂无"
+    lines: list[str] = []
+    for idx, item in enumerate(results, 1):
+        lines.append(f"\n[查询 {idx}] {item.get('question', '未知问题')}")
+        if item.get("sql"):
+            lines.append(f"SQL: {item.get('sql')}")
+        lines.append(f"结果: {json.dumps(item.get('result'), ensure_ascii=False, default=str)[:500]}")
+    return "\n".join(lines)
+
+
+def _recent_conversation_transcript(
+    state: AgentState,
+    max_messages: int = 8,
+) -> str:
+    """Return a concise transcript of the recent conversation for context.
+
+    Includes both user and assistant messages so the router LLM can judge
+    intent based on the full context, not just the last question.
+    """
+    messages = state.get("messages", [])[-max_messages:]
+    lines: list[str] = []
+    for msg in messages:
         if isinstance(msg, HumanMessage):
-            if not found_last:
-                found_last = True
-                continue
-            content = msg.content
-            return content if isinstance(content, str) else str(content)
-    return ""
+            role = "用户"
+        elif isinstance(msg, AIMessage):
+            # Skip long synthesized answers in the transcript; keep it short.
+            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+            if len(content) > 200:
+                content = content[:200] + "…"
+            role = "助手"
+        else:
+            continue
+        content = msg.content if isinstance(msg.content, str) else str(msg.content)
+        if content:
+            lines.append(f"{role}: {content[:400]}")
+    return "\n".join(lines)
 
 
 def _parse_is_data_question(raw: str) -> bool:
@@ -146,13 +145,13 @@ async def _classify_with_llm(question: str, state: AgentState | None = None) -> 
     """
     context = ""
     if state is not None:
-        previous = _second_last_user_message(state)
-        if previous:
-            context = f"\n\n前一条用户提问：{previous}"
+        transcript = _recent_conversation_transcript(state)
+        if transcript:
+            context = f"\n\n最近对话上下文：\n{transcript}"
 
     messages = [
-        SystemMessage(content=_ROUTER_SYSTEM_PROMPT),
-        HumanMessage(content=f"当前用户提问：{question}{context}"),
+        SystemMessage(content=ROUTER_SYSTEM_PROMPT),
+        HumanMessage(content=f"当前用户最新提问：{question}{context}"),
     ]
     # Simple retry: two attempts to parse a valid JSON boolean.
     for attempt in range(2):
@@ -223,7 +222,7 @@ async def _generate_metric_followup(
     previous_dsl_json = json.dumps(previous_dsl, ensure_ascii=False, indent=2)
     messages = [
         SystemMessage(
-            content=_FOLLOWUP_SYSTEM_PROMPT.format(
+            content=FOLLOWUP_SYSTEM_PROMPT.format(
                 previous_dsl=previous_dsl_json,
                 previous_sql=previous_sql or "",
                 question=question,
@@ -251,7 +250,49 @@ async def _generate_metric_followup(
             continue
 
         try:
-            sql = render_to_sql(new_dsl)
+            from app.query.dsl import MetricQuery
+
+            # Normalize dimensions to strings. Some LLMs emit {"name": ..., "grain": ...}
+            # objects instead of plain dimension names.
+            dims: list[Any] = list(new_dsl.get("dimensions") or [])
+            normalized_dims: list[str] = []
+            for dim in dims:
+                if isinstance(dim, str):
+                    normalized_dims.append(dim)
+                elif isinstance(dim, dict):
+                    name = dim.get("name")
+                    if isinstance(name, str):
+                        normalized_dims.append(name)
+
+            # Ensure time_range.field appears in dimensions when grain is set,
+            # otherwise the renderer will not GROUP BY it.
+            time_range = new_dsl.get("time_range")
+            if time_range and time_range.get("grain"):
+                field = time_range.get("field")
+                if field and field not in normalized_dims:
+                    normalized_dims.append(field)
+            new_dsl["dimensions"] = normalized_dims
+
+            # Normalize order_by: accept both {"field": ..., "dir": ...} and the
+            # malformed {"field": ..., "order": ...} produced by some models.
+            order_by: list[Any] = list(new_dsl.get("order_by") or [])
+            normalized_order_by: list[dict[str, Any]] = []
+            for ob in order_by:
+                if isinstance(ob, str):
+                    parts = ob.split()
+                    normalized_order_by.append(
+                        {"field": parts[0], "dir": parts[1] if len(parts) > 1 else "asc"}
+                    )
+                elif isinstance(ob, dict):
+                    item = dict(ob)
+                    if "order" in item and "dir" not in item:
+                        item["dir"] = item.pop("order")
+                    if "field" in item:
+                        normalized_order_by.append(item)
+            new_dsl["order_by"] = normalized_order_by
+
+            query = MetricQuery.model_validate(new_dsl)
+            sql = render_to_sql(query)
             return {"ok": True, "query": new_dsl, "sql": sql}
         except Exception as exc:
             logger.warning("Follow-up DSL render failed: %s", exc)
@@ -276,12 +317,15 @@ async def _generate_metric_followup(
 
 
 async def generate_sql_node(state: AgentState) -> dict[str, Any]:
-    """Generate SQL deterministically based on the user question.
+    """Generate SQL deterministically based on the active data question.
 
     This node does not expose any tool to the LLM; it simply calls the
     existing DSL/nl2sql generators and writes the result into state.
+
+    During a multi-step analysis loop, the active question comes from
+    ``state["refined_question"]`` rather than the last user message.
     """
-    question = _last_user_message(state)
+    question = _current_data_question(state)
     if not question:
         return {"query_error": "没有检测到用户问题"}
 
@@ -291,7 +335,49 @@ async def generate_sql_node(state: AgentState) -> dict[str, Any]:
 
     update: dict[str, Any] = {"query_error": None}
 
-    if state.get("is_metric_followup") and state.get("dsl"):
+    # If this is a fresh data question (not a continuation of the multi-step
+    # reflection loop), reset loop state so that stale data from earlier turns
+    # does not leak into the new analysis. ``refined_question`` is deliberately
+    # left untouched when set, because data_reflection_node needs it to know
+    # which sub-query was actually executed in the current iteration.
+    if not state.get("refined_question"):
+        update.update(
+            {
+                "collected_results": [],
+                "data_iterations": 0,
+                "data_sufficient": None,
+                "refined_question": None,
+            }
+        )
+
+    # Multi-step loop: if a refined_question was set by reflection, treat it as
+    # a fresh query through the normal routing (it already contains full intent).
+    if state.get("refined_question"):
+        intent = classify_question(question)
+        update["intent"] = intent.value
+        if intent == UserIntent.METRIC_ANALYSIS:
+            result = await _generate_metric_sql(question)
+        else:
+            settings = get_settings()
+            nl_result = await generate_nl_sql(
+                question,
+                dialect=settings.query_sql_dialect,
+            )
+            if nl_result.get("ok"):
+                result: dict[str, Any] = {
+                    "ok": True,
+                    "query": None,
+                    "sql": nl_result["sql"],
+                }
+            else:
+                result = {
+                    "ok": False,
+                    "query": None,
+                    "error": nl_result.get("error"),
+                    "stage": "nl2sql_generation",
+                    "raw": nl_result.get("raw"),
+                }
+    elif state.get("is_metric_followup") and state.get("dsl"):
         update["intent"] = UserIntent.METRIC_ANALYSIS.value
         result = await _generate_metric_followup(
             question,
@@ -368,30 +454,119 @@ async def execute_sql_node(state: AgentState) -> dict[str, Any]:
         return {"execution_result": None, "execution_error": f"SQL 执行异常: {exc}"}
 
 
-async def synthesize_node(state: AgentState) -> dict[str, Any]:
-    """Synthesize the final answer from the data-pipeline state."""
-    payload = {
-        "question": _last_user_message(state),
-        "is_data_question": state.get("is_data_question"),
-        "intent": state.get("intent"),
-        "dsl": state.get("dsl"),
-        "sql": state.get("sql"),
-        "query_error": state.get("query_error"),
-        "execution_result": state.get("execution_result"),
-        "execution_error": state.get("execution_error"),
-    }
-    context = json.dumps(payload, ensure_ascii=False, default=str, indent=2)
+async def data_reflection_node(state: AgentState) -> dict[str, Any]:
+    """Decide whether the collected data is sufficient or more queries are needed.
 
-    messages = [
-        SystemMessage(content=_SYNTHESIZE_SYSTEM_PROMPT),
-        HumanMessage(content=f"请根据以下上下文生成最终回答：\n\n{context}"),
-    ]
+    Appends the latest execution result to ``collected_results`` and asks a
+    lightweight LLM to plan the next step. This enables multi-step data analysis
+    where a single SQL is not enough to answer the user's original question.
+    """
+    original_question = _last_user_message(state)
+    last_question = _current_data_question(state)
+    last_sql = state.get("sql") or ""
+    last_result = state.get("execution_result") or state.get("execution_error") or "无结果"
+
+    collected: list[dict[str, Any]] = list(state.get("collected_results") or [])
+    collected.append(
+        {
+            "question": last_question,
+            "sql": last_sql,
+            "result": last_result,
+        }
+    )
+
+    iterations = state.get("data_iterations", 0) + 1
+
+    prompt = DATA_REFLECTION_SYSTEM_PROMPT.format(
+        original_question=original_question,
+        collected_results=_format_collected_results(collected),
+        last_question=last_question,
+        last_sql=last_sql,
+        last_result=json.dumps(last_result, ensure_ascii=False, default=str),
+    )
+
+    for attempt in range(2):
+        response = await get_llm().ainvoke([SystemMessage(content=prompt)])
+        raw = response.content if hasattr(response, "content") else str(response)
+        cleaned = _extract_json(raw)
+        try:
+            parsed = json.loads(cleaned)
+            data_sufficient = bool(parsed.get("data_sufficient", False))
+            refined_question = parsed.get("refined_question")
+            if not data_sufficient and not refined_question:
+                # If the model says insufficient but gives no next question,
+                # force final synthesis to avoid an empty loop.
+                data_sufficient = True
+            return {
+                "collected_results": collected,
+                "data_iterations": iterations,
+                "data_sufficient": data_sufficient,
+                "refined_question": refined_question if not data_sufficient else None,
+            }
+        except json.JSONDecodeError:
+            logger.warning("Data reflection returned invalid JSON: %s", raw)
+            if attempt == 1:
+                return {
+                    "collected_results": collected,
+                    "data_iterations": iterations,
+                    "data_sufficient": True,
+                    "refined_question": None,
+                }
+
+    # Should never reach here.
+    return {
+        "collected_results": collected,
+        "data_iterations": iterations,
+        "data_sufficient": True,
+        "refined_question": None,
+    }
+
+
+async def synthesize_node(state: AgentState) -> dict[str, Any]:
+    """Synthesize the final answer from all collected data-pipeline results."""
+    original_question = _last_user_message(state)
+    collected = state.get("collected_results") or []
+
+    # Fallback: if the multi-step loop never ran, synthesize from the single
+    # current result for backwards compatibility.
+    if not collected and (state.get("sql") or state.get("execution_result")):
+        payload = {
+            "question": original_question,
+            "is_data_question": state.get("is_data_question"),
+            "intent": state.get("intent"),
+            "dsl": state.get("dsl"),
+            "sql": state.get("sql"),
+            "query_error": state.get("query_error"),
+            "execution_result": state.get("execution_result"),
+            "execution_error": state.get("execution_error"),
+        }
+        context = json.dumps(payload, ensure_ascii=False, default=str, indent=2)
+        messages = [
+            SystemMessage(content=SYNTHESIZE_SYSTEM_PROMPT),
+            HumanMessage(content=f"请根据以下上下文生成最终回答：\n\n{context}"),
+        ]
+    else:
+        context = f"""\
+用户原始问题：
+{original_question}
+
+已执行的多步查询及结果：
+{_format_collected_results(collected)}
+"""
+        messages = [
+            SystemMessage(content=FINAL_SYNTHESIZE_SYSTEM_PROMPT),
+            HumanMessage(content=context),
+        ]
+
     response = await get_llm().ainvoke(messages)
     answer = response.content if hasattr(response, "content") else str(response)
 
     return {
         "final_answer": answer,
         "messages": [AIMessage(content=answer)],
+        # Clear the loop cursor so a fresh user question on the same thread
+        # does not accidentally resume the reflection loop.
+        "refined_question": None,
     }
 
 
@@ -399,5 +574,6 @@ __all__ = [
     "router_node",
     "generate_sql_node",
     "execute_sql_node",
+    "data_reflection_node",
     "synthesize_node",
 ]

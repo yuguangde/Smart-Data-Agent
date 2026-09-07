@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 from app.agent.graph import get_compiled_graph
 from app.api import api_router
 from app.config import get_settings
-from app.memory.checkpointer import shutdown_checkpointer
+from app.memory.checkpointer import build_checkpointer, shutdown_checkpointer
 from app.tools.mcp_loader import init_mcp_tools, shutdown_mcp
 
 logger = logging.getLogger(__name__)
@@ -41,6 +41,9 @@ async def lifespan(app: FastAPI):
         settings.hitl,
     )
 
+    # Build the async checkpointer up-front so the compiled graph can use it.
+    checkpointer = await build_checkpointer(settings)
+
     # MCP is best-effort: any failure is logged and we fall back to built-in tools.
     loaded_mcp_tools: list[Any] = []
     try:
@@ -60,8 +63,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await shutdown_mcp()
-        with shutdown_checkpointer():
-            pass
+        await shutdown_checkpointer()
 
 
 def create_app() -> FastAPI:

@@ -14,6 +14,7 @@ import logging
 from langchain_core.tools import BaseTool
 
 from app.tools.calculator import calculator
+from app.tools.data_query import execute_metric_dsl, execute_sql
 from app.tools.datetime_tool import get_current_time
 from app.tools.file_reader import read_file
 from app.tools.knowledge_search import knowledge_search
@@ -31,6 +32,8 @@ BUILTIN_TOOLS: list[BaseTool] = [
     web_search,
     knowledge_search,
     read_file,
+    execute_metric_dsl,
+    execute_sql,
     # Register additional built-in tools here.
 ]
 

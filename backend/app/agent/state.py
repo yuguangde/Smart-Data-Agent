@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from langgraph.graph import MessagesState
+from pydantic import Field
 
 
 class AgentState(MessagesState):
@@ -27,6 +28,12 @@ class AgentState(MessagesState):
     query_error: str | None = None
     execution_result: dict[str, Any] | None = None
     execution_error: str | None = None
+
+    # Multi-step data analysis loop
+    data_iterations: int = 0
+    refined_question: str | None = None
+    collected_results: list[dict[str, Any]] = Field(default_factory=list)
+    data_sufficient: bool | None = None
 
     # General-agent fields
     pending_tool_calls: list[dict[str, Any]] | None = None
