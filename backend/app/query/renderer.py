@@ -253,6 +253,14 @@ class MetricQueryRenderer:
 
         dimensions: list[tuple[str, str]] = []
         selected_dim_names = list(dict.fromkeys(query.dimensions))
+
+        # If a time grain is requested, make sure the time field is grouped on.
+        # LLMs sometimes set grain without adding the time field to dimensions.
+        if query.time_range and query.time_range.grain:
+            time_field = query.time_range.field
+            if time_field not in selected_dim_names:
+                selected_dim_names.append(time_field)
+
         for dim_name in selected_dim_names:
             if dim_name not in dataset.dimension_names:
                 # Best-effort: allow it if it is a selected metric name (rare case).

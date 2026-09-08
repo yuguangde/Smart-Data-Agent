@@ -1,6 +1,7 @@
 """Graph nodes: agent (LLM), tool marshal, and the ToolNode runner."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -18,6 +19,18 @@ if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
 
 logger = logging.getLogger(__name__)
+
+# Serialize tool invocations.  LangGraph's ToolNode executes tool_calls in
+# parallel by default; combined with MCP tools that share a single session,
+# this has led to empty tool outputs and state corruption.  This lock forces
+# one tool call at a time.
+_TOOL_CALL_SERIAL_LOCK = asyncio.Lock()
+
+
+async def _serializing_awrap_tool_call(request, execute):
+    """Wrapper that executes each tool call under a global async lock."""
+    async with _TOOL_CALL_SERIAL_LOCK:
+        return await execute(request)
 
 
 def _build_model_with_tools() -> tuple["BaseChatModel", list["BaseTool"]]:
@@ -64,7 +77,9 @@ def make_agent_node():
     cleanly.
     """
     chat, tools = _build_model_with_tools()
-    tool_node = ToolNode(tools)
+    # Serialize tool execution to avoid empty outputs caused by parallel MCP
+    # invocations under a shared session.
+    tool_node = ToolNode(tools, awrap_tool_call=_serializing_awrap_tool_call)
     marshal_node = make_marshal_node()
     system_prompt = build_system_prompt(tools)
 

@@ -341,9 +341,16 @@ async def stream_events(
 
             elif kind == "on_tool_end":
                 output = data.get("output", "")
+                tool_call_id: str | None = None
+                if isinstance(output, ToolMessage):
+                    tool_call_id = getattr(output, "tool_call_id", None)
+                    output = output.content
                 yield {
                     "event": "tool_end",
-                    "data": {"output": _plain_str(output)},
+                    "data": {
+                        "id": tool_call_id,
+                        "output": _plain_str(output),
+                    },
                 }
 
             elif kind == "on_chain_end" and name == "LangGraph":
