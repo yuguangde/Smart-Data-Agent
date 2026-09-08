@@ -70,6 +70,11 @@ _BASE_SYSTEM_PROMPT = """你是 Smart Data Agent —— 一个精准、可靠的
   1. 先明确要查什么，再调用 `execute_sql` 执行只读 SQL；
   2. 拿到结果后，展示数据并解释其含义。
 
+- **SQL 中的表名必须使用数据库全限定名**（如 `dwd.table_name`），禁止使用裸表名。
+  `execute_sql` 和使用到的 MCP StarRocks 工具（如 `starrocks_read_query`、
+  `starrocks_query_and_plotly_chart`）都不保证 session db 会跨调用保持，
+  因此绝对不要依赖 `starrocks_set_session_db` 来设置默认库。
+
 - 数据只覆盖到某个时间点时，先展示已查到的数据（例如"截至9月6日，累计4271"），
   然后再补充说明"9月7-8日暂无数据/未入库"。
 
