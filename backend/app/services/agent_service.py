@@ -320,24 +320,23 @@ async def stream_events(
                 if tc_chunks:
                     for tc in tc_chunks:
                         if tc.get("name"):
+                            tc_args = tc.get("args")
                             yield {
                                 "event": "tool_start",
                                 "data": {
                                     "id": tc.get("id"),
                                     "name": tc.get("name"),
+                                    "input": tc_args if isinstance(tc_args, dict) else {},
                                 },
                             }
 
             elif kind == "on_tool_start":
-                tname = data.get("name") or ev.get("name") or ""
-                tool_input = data.get("input", {})
-                yield {
-                    "event": "tool_start",
-                    "data": {
-                        "name": tname,
-                        "input": tool_input if isinstance(tool_input, dict) else {"value": tool_input},
-                    },
-                }
+                # Skip emitting tool_start here: on_chat_model_stream already
+                # emits tool_start with the LLM tool_call_id, which is needed
+                # for the frontend to match tool_start/tool_end pairs correctly.
+                # on_tool_start does not carry the tool_call_id, so emitting it
+                # causes duplicate/confusing cards for tools with the same name.
+                pass
 
             elif kind == "on_tool_end":
                 output = data.get("output", "")
