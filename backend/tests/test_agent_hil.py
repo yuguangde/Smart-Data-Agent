@@ -64,7 +64,6 @@ def _build_graph(
     """Patch the LLM and clear the compiled-graph cache so the graph uses fakes."""
     from app.agent import graph as graph_mod
     from app.agent import nodes
-    from app.agent import query_nodes
 
     fake_agent_llm = _FakeLLM(
         responses=[
@@ -72,11 +71,7 @@ def _build_graph(
             (content, []),
         ]
     )
-    fake_router_llm = _FakeLLM(
-        responses=[(json.dumps({"is_data_question": False}), [])]
-    )
     monkeypatch.setattr(nodes, "get_llm", lambda *args, **kwargs: fake_agent_llm)
-    monkeypatch.setattr(query_nodes, "get_llm", lambda *args, **kwargs: fake_router_llm)
     graph_mod.get_compiled_graph.cache_clear()
 
 

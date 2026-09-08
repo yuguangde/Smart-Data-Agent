@@ -1,7 +1,7 @@
 """Query DSL and execution helpers.
 
-``app.query`` contains the LLM-facing DSL models, the semantic registry, and
-the deterministic SQL renderer used to answer structured data questions.
+``app.query`` contains the DSL models, the semantic registry, and the
+deterministic SQL renderer used to answer structured data questions.
 """
 
 from app.query.dsl import (
@@ -16,9 +16,7 @@ from app.query.dsl import (
     TimeGrain,
     TimeRange,
     metric_query_json_schema,
-    metric_query_tools,
 )
-from app.query.generator import generate_for_dataset, generate_metric_query
 from app.query.registry import (
     SemanticDataset,
     SemanticMetric,
@@ -45,9 +43,6 @@ __all__ = [
     "SortDir",
     "TimeGrain",
     "TimeRange",
-    "generate_for_dataset",
-    "generate_metric_query",
     "metric_query_json_schema",
-    "metric_query_tools",
     "render_to_sql",
 ]

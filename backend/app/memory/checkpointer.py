@@ -74,14 +74,10 @@ async def reset_checkpointer() -> AsyncIterator[None]:
                     logger.warning("Error closing checkpointer: %s", exc)
 
 
-@asynccontextmanager
-async def shutdown_checkpointer() -> AsyncIterator[None]:
+async def shutdown_checkpointer() -> None:
     """Tear down the checkpointer (e.g. close SQLite connections) on shutdown."""
-    try:
-        yield
-    finally:
-        async with reset_checkpointer():
-            pass
+    async with reset_checkpointer():
+        pass
 
 
 __all__ = ["build_checkpointer", "get_checkpointer", "reset_checkpointer", "shutdown_checkpointer"]

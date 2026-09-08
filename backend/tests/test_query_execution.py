@@ -1,8 +1,7 @@
-"""Tests for the agent-driven data query tool chain.
+"""Tests for the agent-driven data query execution tools.
 
-The old program-driven pipeline (router -> generate_sql -> execute_sql ->
-synthesize) has been replaced by the agent loop: the Agent LLM decides which
- composable data tools to call, and the tools only do one thing each.
+The agent is the only LLM caller.  These tools only validate/render/execute the
+DSL or SQL that the agent produced.
 """
 from __future__ import annotations
 
@@ -29,7 +28,7 @@ _FAKE_DSL = {
 }
 
 _FAKE_SQL = (
-    "-- MetricQuery: test_sales\n"
+    "\\\n-- MetricQuery: test_sales\n"
     'SELECT\n  region AS "region",\n  SUM(amount) AS "revenue"\n'
     "FROM db.sales_table\nWHERE 1=1\nGROUP BY\n  region\nLIMIT 100"
 )
@@ -78,19 +77,6 @@ def _fake_registry() -> SemanticRegistry:
     return registry
 
 
-class _FakeLLM:
-    """Fake LLM used to avoid real network calls during graph tests."""
-
-    def __init__(self, content: str) -> None:
-        self.content = content
-
-    async def ainvoke(self, messages: list[Any], **kwargs: Any) -> AIMessage:
-        return AIMessage(content=self.content)
-
-    def bind_tools(self, tools: list[Any]) -> "_FakeLLM":
-        return self
-
-
 class _StagedFakeLLM:
     """Async LLM whose ainvoke returns a fixed sequence of responses."""
 
@@ -116,12 +102,6 @@ class _StagedFakeLLM:
         return self
 
 
-def _patch_llm(monkeypatch: pytest.MonkeyPatch, content: str) -> None:
-    """Patch get_llm to a single-response fake."""
-    fake = _FakeLLM(content)
-    monkeypatch.setattr("app.agent.nodes.get_llm", lambda *args, **kwargs: fake)
-
-
 def _patch_llm_staged(
     monkeypatch: pytest.MonkeyPatch,
     responses: list[str | tuple[str, list[dict[str, Any]]]],
@@ -138,51 +118,62 @@ async def _fake_execute_read_query(sql: str, db: str = "") -> dict[str, Any]:
 
 
 def test_data_tools_are_exposed_to_llm() -> None:
-    """The agent should see all four composable data-query tools."""
+    """The agent should see the data context and execution tools."""
     from app.tools import get_llm_tools
 
     names = {t.name for t in get_llm_tools()}
-    required = {
-        "generate_metric_dsl",
-        "render_dsl_to_sql",
-        "generate_nl_sql",
+    assert {
+        "get_semantic_context",
+        "execute_metric_dsl",
         "execute_sql",
-    }
-    assert required.issubset(names)
+    }.issubset(names)
 
 
 @pytest.mark.anyio
-async def test_generate_metric_dsl_tool_returns_dsl(
+async def test_get_semantic_context_tool_returns_context(
+    _fake_registry: SemanticRegistry,
+) -> None:
+    """get_semantic_context should return the semantic layer summary."""
+    from app.tools.semantic_layer import get_semantic_context
+
+    result = await get_semantic_context.ainvoke({})
+    assert "test_sales" in result
+    assert "revenue" in result
+    assert "region" in result
+
+
+@pytest.mark.anyio
+async def test_execute_metric_dsl_tool_validates_renders_and_executes(
     monkeypatch: pytest.MonkeyPatch,
     _fake_registry: SemanticRegistry,
 ) -> None:
-    """generate_metric_dsl should return a DSL dict without executing SQL."""
-    import app.tools.data_query as dq_mod
-    from app.tools.data_query import generate_metric_dsl
+    """execute_metric_dsl should validate DSL, render SQL, and execute it."""
+    from app.tools.data_query import execute_metric_dsl
 
-    async def fake_gen(_question: str) -> dict[str, Any]:
-        return {"ok": True, "query": _FAKE_DSL}
+    monkeypatch.setattr(
+        "app.agent.executor.execute_read_query",
+        _fake_execute_read_query,
+    )
 
-    monkeypatch.setattr(dq_mod, "generate_metric_query", fake_gen)
-
-    raw = await generate_metric_dsl.ainvoke({"question": "按 region 汇总 revenue"})
+    raw = await execute_metric_dsl.ainvoke({"dsl_json": json.dumps(_FAKE_DSL)})
     parsed = json.loads(raw)
     assert parsed["ok"]
     assert parsed["dsl"] == _FAKE_DSL
-    assert "sql" not in parsed
+    assert _FAKE_SQL in parsed["sql"]
+    assert parsed["result"] == _FAKE_RESULT
 
 
 @pytest.mark.anyio
-async def test_render_dsl_to_sql_tool_renders_sql(
+async def test_execute_metric_dsl_tool_rejects_bad_dsl(
     _fake_registry: SemanticRegistry,
 ) -> None:
-    """render_dsl_to_sql should turn a MetricQuery DSL into SQL."""
-    from app.tools.data_query import render_dsl_to_sql
+    """execute_metric_dsl should return an error for invalid DSL."""
+    from app.tools.data_query import execute_metric_dsl
 
-    raw = await render_dsl_to_sql.ainvoke({"dsl_json": json.dumps(_FAKE_DSL)})
+    raw = await execute_metric_dsl.ainvoke({"dsl_json": "not valid json"})
     parsed = json.loads(raw)
-    assert parsed["ok"]
-    assert _FAKE_SQL in parsed["sql"]
+    assert not parsed["ok"]
+    assert "解析失败" in parsed["error"] or "JSON" in parsed["error"]
 
 
 @pytest.mark.anyio
@@ -204,19 +195,14 @@ async def test_execute_sql_tool_runs_query(
 
 
 @pytest.mark.anyio
-async def test_agent_chains_dsl_render_execute_tools(
+async def test_agent_chains_execute_metric_dsl(
     monkeypatch: pytest.MonkeyPatch,
     _fake_registry: SemanticRegistry,
 ) -> None:
-    """The agent should orchestrate generate_metric_dsl -> render_dsl_to_sql -> execute_sql."""
-    import app.tools.data_query as dq_mod
+    """The agent should call execute_metric_dsl with a DSL JSON it produced."""
     from app.agent import graph as graph_mod
     from app.services.agent_service import invoke
 
-    async def fake_gen(_question: str) -> dict[str, Any]:
-        return {"ok": True, "query": _FAKE_DSL}
-
-    monkeypatch.setattr(dq_mod, "generate_metric_query", fake_gen)
     monkeypatch.setattr(
         "app.agent.executor.execute_read_query",
         _fake_execute_read_query,
@@ -227,32 +213,12 @@ async def test_agent_chains_dsl_render_execute_tools(
         monkeypatch,
         [
             (
-                "Generating DSL.",
+                "Executing metric DSL.",
                 [
                     {
                         "id": "call_1",
-                        "name": "generate_metric_dsl",
-                        "args": {"question": "按 region 汇总 revenue"},
-                    }
-                ],
-            ),
-            (
-                "Rendering SQL.",
-                [
-                    {
-                        "id": "call_2",
-                        "name": "render_dsl_to_sql",
+                        "name": "execute_metric_dsl",
                         "args": {"dsl_json": dsl_json},
-                    }
-                ],
-            ),
-            (
-                "Executing SQL.",
-                [
-                    {
-                        "id": "call_3",
-                        "name": "execute_sql",
-                        "args": {"sql": _FAKE_SQL},
                     }
                 ],
             ),
@@ -265,7 +231,7 @@ async def test_agent_chains_dsl_render_execute_tools(
     result = await invoke(
         user_message="按 region 汇总 revenue",
         user_id="test",
-        thread_id="test-agent-chain",
+        thread_id="test-agent-metric-dsl",
     )
 
     assert "NORTH" in result["message"]["content"]

@@ -5,6 +5,7 @@ They avoid exposing SQL execution as a tool decision to the model.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -14,6 +15,11 @@ from langchain_core.tools import BaseTool
 from app.tools import get_all_tools
 
 logger = logging.getLogger(__name__)
+
+# Serialize calls to the shared MCP SQL execution tool.  Multiple LangGraph
+# tool calls may arrive concurrently, and some MCP clients/session are not
+# fully async-safe under concurrent invocation.
+_MCP_READ_QUERY_LOCK = asyncio.Lock()
 
 
 def _get_tool(name: str) -> BaseTool | None:
@@ -36,7 +42,8 @@ async def execute_read_query(sql: str, db: str = "") -> dict[str, Any]:
         raise RuntimeError("starrocks_read_query tool is not available")
 
     logger.debug("Executing SQL via %s", tool.name)
-    raw = await tool.ainvoke({"query": sql, "db": db})
+    async with _MCP_READ_QUERY_LOCK:
+        raw = await tool.ainvoke({"query": sql, "db": db})
 
     if isinstance(raw, str):
         return json.loads(raw)
