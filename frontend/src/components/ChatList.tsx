@@ -6,14 +6,14 @@
  * final assistant bubble.
  */
 import {
-  CodeOutlined,
+  CheckCircleOutlined,
+  LoadingOutlined,
   RobotOutlined,
-  ToolOutlined,
   UserOutlined,
 } from "@ant-design/icons";
 import { Bubble } from "@ant-design/x";
-import { Avatar, Card, Empty, Space, Tag, Typography } from "antd";
-import { useEffect, useRef } from "react";
+import { Avatar, Button, Card, Empty, Space, Typography } from "antd";
+import { useEffect, useRef, useState } from "react";
 import type { ChatMessage, ToolCall } from "@/types/chat";
 import {
   ChartIframe,
@@ -122,49 +122,84 @@ function MessageBubble({
 }
 
 function ToolCallCard({ tc }: { tc: ToolCall }) {
+  const [expanded, setExpanded] = useState(false);
+  const finished = !!tc.output;
+
   return (
     <Card
       size="small"
       className="tool-call-card"
-      title={
-        <Space size={6}>
-          {tc.output ? (
-            <Tag color="green">已完成</Tag>
-          ) : (
-            <Tag color="processing">调用中</Tag>
-          )}
-          <CodeOutlined />
-          <Text strong>{tc.name}</Text>
-        </Space>
-      }
-      extra={<ToolOutlined />}
+      styles={{ body: { padding: "8px 12px" } }}
     >
-      {tc.input ? (
-        <details open>
-          <summary style={{ cursor: "pointer", color: "#1677ff" }}>
-            输入参数
-          </summary>
-          <pre className="tool-call-pre">
-            {JSON.stringify(tc.input, null, 2)}
-          </pre>
-        </details>
-      ) : null}
-      {tc.output ? (
-        <details open style={{ marginTop: tc.input ? 8 : 0 }}>
-          <summary style={{ cursor: "pointer", color: "#1677ff" }}>
-            输出结果
-          </summary>
-          {(() => {
-            const chartUrl = extractChartProxyUrl(tc.output);
-            return chartUrl ? (
-              <div style={{ marginTop: 8 }}>
-                <ChartIframe src={chartUrl} />
-              </div>
-            ) : (
-              <pre className="tool-call-pre">{tc.output}</pre>
-            );
-          })()}
-        </details>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          minHeight: 24,
+        }}
+      >
+        {finished ? (
+          <CheckCircleOutlined
+            style={{ color: "#52c41a", fontSize: 16 }}
+          />
+        ) : (
+          <LoadingOutlined style={{ color: "#1677ff", fontSize: 16 }} />
+        )}
+        <Text
+          strong
+          style={{
+            flex: 1,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {tc.name}
+        </Text>
+        <Text type="secondary" style={{ fontSize: 12, flexShrink: 0 }}>
+          {finished ? "已完成" : "调用中..."}
+        </Text>
+        <Button
+          type="link"
+          size="small"
+          style={{ padding: 0, fontSize: 12, flexShrink: 0 }}
+          onClick={() => setExpanded((v) => !v)}
+        >
+          {expanded ? "收起" : "详情"}
+        </Button>
+      </div>
+
+      {expanded && (tc.input || tc.output) ? (
+        <div style={{ marginTop: 8 }}>
+          {tc.input ? (
+            <div style={{ marginBottom: 8 }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                输入参数
+              </Text>
+              <pre className="tool-call-pre">
+                {JSON.stringify(tc.input, null, 2)}
+              </pre>
+            </div>
+          ) : null}
+          {tc.output ? (
+            <div>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                输出结果
+              </Text>
+              {(() => {
+                const chartUrl = extractChartProxyUrl(tc.output);
+                return chartUrl ? (
+                  <div style={{ marginTop: 4 }}>
+                    <ChartIframe src={chartUrl} />
+                  </div>
+                ) : (
+                  <pre className="tool-call-pre">{tc.output}</pre>
+                );
+              })()}
+            </div>
+          ) : null}
+        </div>
       ) : null}
     </Card>
   );
