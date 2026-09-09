@@ -1,9 +1,8 @@
 /**
- * ContextUsage — small footer showing how much of the LLM context window
- * the current thread is consuming.
+ * ContextUsage — small footer showing current thread diagnostics.
  */
 import { useEffect, useState } from "react";
-import { Progress, Typography } from "antd";
+import { Typography } from "antd";
 
 import { getThreadContextSize } from "@/api/chat";
 import type {
@@ -79,22 +78,21 @@ export function ContextUsage({ threadId, messages, loading }: Props) {
         display: "flex",
         alignItems: "center",
         justifyContent: "flex-end",
-        gap: 8,
         marginTop: 4,
         height: 16,
       }}
     >
-      <Text type="secondary" style={{ fontSize: 12, whiteSpace: "nowrap" }}>
-        上下文 {formatK(total)} / {formatK(CONTEXT_WINDOW_TOKENS)} tokens
-        （{ratio}%）
+      <Text
+        type="secondary"
+        style={{ fontSize: 12, whiteSpace: "nowrap" }}
+      >
+        消息 <strong>{stats.message_count}</strong> · 工具{" "}
+        <strong>{stats.tool_call_count}</strong> · 上下文{" "}
+        {formatK(total)} / {formatK(CONTEXT_WINDOW_TOKENS)} tokens
+        <span style={{ color: ratioColor(ratio), marginLeft: 6 }}>
+          （{ratio}%）
+        </span>
       </Text>
-      <Progress
-        percent={ratio}
-        size="small"
-        showInfo={false}
-        strokeColor={ratioColor(ratio)}
-        style={{ width: 60, minWidth: 60, margin: 0 }}
-      />
     </div>
   );
 }
