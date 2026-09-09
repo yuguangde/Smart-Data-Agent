@@ -58,6 +58,50 @@ def _msg_timestamp(msg: BaseMessage) -> datetime | None:
         return None
 
 
+def _drop_unfulfilled_tool_calls(
+    messages: list[BaseMessage],
+) -> list[BaseMessage]:
+    """Drop AI messages whose tool_calls lack matching ToolMessages.
+
+    This fixes checkpoints created when a tool crashed before writing its
+    ``ToolMessage``: an assistant message with dangling ``tool_calls`` would
+    otherwise make the OpenAI API reject the request.
+    """
+    fulfilled_tool_ids = {
+        msg.tool_call_id
+        for msg in messages
+        if isinstance(msg, ToolMessage)
+    }
+
+    unfulfilled_tool_ids: set[str] = set()
+    for msg in messages:
+        if isinstance(msg, AIMessage) and msg.tool_calls:
+            for tc in msg.tool_calls:
+                tc_id = tc.get("id")
+                if tc_id and tc_id not in fulfilled_tool_ids:
+                    unfulfilled_tool_ids.add(tc_id)
+
+    if not unfulfilled_tool_ids:
+        return messages
+
+    logger.warning(
+        "Dropping %d unfulfilled tool_call(s) to keep message sequence valid",
+        len(unfulfilled_tool_ids),
+    )
+
+    cleaned: list[BaseMessage] = []
+    for msg in messages:
+        if isinstance(msg, AIMessage) and msg.tool_calls:
+            if any(
+                tc.get("id") in unfulfilled_tool_ids for tc in msg.tool_calls
+            ):
+                continue
+        if isinstance(msg, ToolMessage) and msg.tool_call_id in unfulfilled_tool_ids:
+            continue
+        cleaned.append(msg)
+    return cleaned
+
+
 def _filter_recent_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
     """Drop messages outside the retention window and ensure the first kept
     message is a human message.
@@ -95,6 +139,8 @@ def _filter_recent_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
                 continue
         cleaned.append(msg)
 
+    cleaned = _drop_unfulfilled_tool_calls(cleaned)
+
     # Ensure the first retained message is from the user.
     first_human = next(
         (i for i, m in enumerate(cleaned) if isinstance(m, HumanMessage)),
@@ -109,7 +155,9 @@ async def _serializing_awrap_tool_call(request, execute):
     """Wrapper that executes each tool call under a global async lock.
 
     Also enforces ``mcp_call_timeout_seconds`` so a hanging StarRocks/MCP call
-    does not leave the graph stuck at a pending tool_call forever.
+    does not leave the graph stuck at a pending tool_call forever. Any other
+    exception is converted to a tool result string so LangGraph always writes a
+    ``ToolMessage`` and the next LLM call sees a valid message sequence.
     """
     settings = get_settings()
     timeout = max(settings.mcp_call_timeout_seconds, 1.0)
@@ -120,6 +168,9 @@ async def _serializing_awrap_tool_call(request, execute):
         except asyncio.TimeoutError:
             logger.warning("Tool call timed out after %.1fs", timeout)
             return f"工具调用超时（>{timeout}s），未获得响应"
+        except Exception as exc:
+            logger.warning("Tool call failed: %s", exc)
+            return f"工具调用失败: {exc}"
 
 
 def _build_model_with_tools() -> tuple["BaseChatModel", list["BaseTool"]]:

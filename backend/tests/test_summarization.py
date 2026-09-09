@@ -8,9 +8,9 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from app.agent.nodes import _call_llm
+from app.agent.nodes import _call_llm, _drop_unfulfilled_tool_calls
 from app.config import CheckpointerKind
 from app.memory.summary_store import SummaryStore, init_summary_store
 from app.tasks.summarizer import _build_transcript
@@ -122,6 +122,24 @@ async def test_call_llm_injects_summary(monkeypatch) -> None:
     assert isinstance(llm_messages[2], HumanMessage)
 
     Path(path).unlink(missing_ok=True)
+
+
+def test_drop_unfulfilled_tool_calls() -> None:
+    ai = AIMessage(
+        content="",
+        tool_calls=[{"id": "tc1", "name": "some_tool", "args": {}}],
+    )
+    user = HumanMessage(content="try again")
+    messages = [user, ai]
+    result = _drop_unfulfilled_tool_calls(messages)
+    assert len(result) == 1
+    assert isinstance(result[0], HumanMessage)
+
+    # Valid tool-call pair should remain intact.
+    tool = ToolMessage(content="ok", tool_call_id="tc1")
+    messages = [user, ai, tool]
+    result = _drop_unfulfilled_tool_calls(messages)
+    assert len(result) == 3
 
 
 @pytest.mark.asyncio
