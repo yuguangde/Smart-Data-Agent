@@ -5,9 +5,13 @@ stay thin and call into this module.
 """
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from typing import Any, AsyncIterator
+
+import aiosqlite
+import tiktoken
 
 from langchain_core.messages import (
     AIMessage,
@@ -19,9 +23,15 @@ from langchain_core.messages import (
 from langgraph.types import Command
 
 from app.agent.graph import get_compiled_graph
+from app.agent.prompts import build_system_prompt
 from app.agent.state import AgentState
+from app.config import get_settings
+from app.tools import get_llm_tools
 
 logger = logging.getLogger(__name__)
+
+# Tokenizer used for approximate LLM context-size diagnostics.
+_TOKEN_ENCODER = tiktoken.get_encoding("cl100k_base")
 
 
 # ---------- Helpers ----------
@@ -417,4 +427,74 @@ async def get_history(thread_id: str) -> list[dict[str, Any]]:
     return []
 
 
-__all__ = ["invoke", "stream_events", "get_history", "new_thread_id"]
+async def _latest_checkpoint_bytes(thread_id: str) -> int:
+    """Return the raw byte size of the most recent checkpoint for a thread."""
+    settings = get_settings()
+    path = settings.sqlite_path_resolved
+    try:
+        async with aiosqlite.connect(str(path)) as db:
+            async with db.execute(
+                "SELECT length(checkpoint) FROM checkpoints "
+                "WHERE thread_id = ? ORDER BY checkpoint_id DESC LIMIT 1",
+                (thread_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+                return int(row[0]) if row else 0
+    except Exception as exc:
+        logger.warning("Failed to read checkpoint size for %s: %s", thread_id, exc)
+        return 0
+
+
+async def get_thread_context_stats(thread_id: str) -> dict[str, Any]:
+    """Return approximate context-size statistics for a thread.
+
+    The figures account for the injected system prompt plus the merged
+    conversation history that the LLM would see on the next turn.
+    """
+    messages = await get_history(thread_id)
+
+    system_prompt = build_system_prompt(get_llm_tools())
+    system_chars = len(system_prompt)
+    system_tokens = len(_TOKEN_ENCODER.encode(system_prompt))
+
+    message_count = len(messages)
+    tool_call_count = 0
+    messages_chars = 0
+    messages_tokens = 0
+
+    for msg in messages:
+        content = msg.get("content") or ""
+        messages_chars += len(content)
+        messages_tokens += len(_TOKEN_ENCODER.encode(content))
+
+        tool_calls = msg.get("tool_calls") or []
+        if tool_calls:
+            tool_call_count += len(tool_calls)
+            for tc in tool_calls:
+                tc_text = json.dumps(tc, ensure_ascii=False, default=str)
+                messages_chars += len(tc_text)
+                messages_tokens += len(_TOKEN_ENCODER.encode(tc_text))
+
+    raw_checkpoint_bytes = await _latest_checkpoint_bytes(thread_id)
+
+    return {
+        "thread_id": thread_id,
+        "message_count": message_count,
+        "tool_call_count": tool_call_count,
+        "system_prompt_chars": system_chars,
+        "system_prompt_tokens": system_tokens,
+        "messages_chars": messages_chars,
+        "messages_tokens": messages_tokens,
+        "total_chars": system_chars + messages_chars,
+        "total_tokens": system_tokens + messages_tokens,
+        "raw_checkpoint_bytes": raw_checkpoint_bytes,
+    }
+
+
+__all__ = [
+    "invoke",
+    "stream_events",
+    "get_history",
+    "get_thread_context_stats",
+    "new_thread_id",
+]

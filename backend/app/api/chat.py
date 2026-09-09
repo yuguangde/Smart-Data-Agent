@@ -22,6 +22,7 @@ from app.api.schemas import (
 from app.config import get_settings
 from app.services.agent_service import (
     get_history,
+    get_thread_context_stats,
     invoke,
     new_thread_id,
     stream_events,
@@ -177,5 +178,14 @@ async def post_chat_stream(req: ChatRequest) -> StreamingResponse:
 async def get_thread(thread_id: str) -> ThreadHistory:
     messages = await get_history(thread_id)
     return ThreadHistory(thread_id=thread_id, messages=[ChatMessage(**m) for m in messages])
+
+
+@router.get(
+    "/threads/{thread_id}/context-size",
+    summary="Estimate the LLM context size for a thread",
+)
+async def get_thread_context_size(thread_id: str) -> dict[str, Any]:
+    """Return approximate token/char statistics for the thread's context."""
+    return await get_thread_context_stats(thread_id)
 
 
