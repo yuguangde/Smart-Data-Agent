@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import aiosqlite
+import msgpack
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
@@ -152,18 +153,57 @@ async def _list_thread_ids() -> list[str]:
             return [str(row[0]) for row in rows]
 
 
+async def _get_latest_checkpoint_ts(thread_id: str) -> datetime | None:
+    """Return the write timestamp of the most recent checkpoint for a thread."""
+    checkpointer = get_checkpointer()
+    if not isinstance(checkpointer, AsyncSqliteSaver):
+        return None
+
+    settings = get_settings()
+    if settings.checkpointer != CheckpointerKind.SQLITE:
+        return None
+
+    path = str(settings.sqlite_path_resolved)
+    async with aiosqlite.connect(path) as db:
+        async with db.execute(
+            "SELECT checkpoint FROM checkpoints "
+            "WHERE thread_id = ? ORDER BY checkpoint_id DESC LIMIT 1",
+            (thread_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            try:
+                data = msgpack.unpackb(row[0])
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("Failed to unpack checkpoint for %s: %s", thread_id, exc)
+                return None
+            ts = data.get("ts")
+            if not ts:
+                return None
+            return datetime.fromisoformat(ts)
+
+
 async def _summarize_thread(
     thread_id: str,
     store: SummaryStore,
     cutoff: datetime,
 ) -> None:
     """Summarize window-outside messages for a single thread."""
+    existing = await store.get_summary(thread_id)
+    if existing:
+        # Fast path: if no new checkpoint has been written since the last
+        # summary, there is nothing new to summarize.
+        latest_checkpoint_ts = await _get_latest_checkpoint_ts(thread_id)
+        up_to = datetime.fromisoformat(existing["summarized_up_to"])
+        if latest_checkpoint_ts is not None and latest_checkpoint_ts <= up_to:
+            return
+
     graph = get_compiled_graph()
     snapshot = await graph.aget_state({"configurable": {"thread_id": thread_id}})
     values = getattr(snapshot, "values", None)
     messages: list[BaseMessage] = list(values.get("messages", [])) if values else []
 
-    existing = await store.get_summary(thread_id)
     existing_up_to_str = existing.get("summarized_up_to") if existing else None
     existing_up_to = (
         datetime.fromisoformat(existing_up_to_str) if existing_up_to_str else None
