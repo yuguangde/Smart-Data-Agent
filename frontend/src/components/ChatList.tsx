@@ -14,10 +14,12 @@ import {
 import { Bubble } from "@ant-design/x";
 import { Avatar, Card, Empty, Space, Tag, Typography } from "antd";
 import { useEffect, useRef } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import type { ChatMessage, ToolCall } from "@/types/chat";
-import { ChartIframe, extractChartProxyUrl } from "./ChartRenderer";
+import {
+  ChartIframe,
+  ChartMarkdown,
+  extractChartProxyUrl,
+} from "./ChartRenderer";
 
 const { Text } = Typography;
 
@@ -104,7 +106,7 @@ function MessageBubble({
         className="markdown-body"
         style={{ marginBottom: message.toolCalls?.length ? 8 : 0 }}
       >
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+        <ChartMarkdown content={content} />
         {message.streaming ? <span className="caret" /> : null}
       </div>
 
