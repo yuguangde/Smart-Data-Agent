@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from datetime import datetime, timezone
 from typing import Any, AsyncIterator
 
 import aiosqlite
@@ -225,7 +226,12 @@ def make_initial_state(
 ) -> AgentState:
     """Build the input dict expected by LangGraph for a new turn."""
     return {
-        "messages": [HumanMessage(content=user_message)],
+        "messages": [
+            HumanMessage(
+                content=user_message,
+                additional_kwargs={"timestamp": datetime.now(timezone.utc).isoformat()},
+            ),
+        ],
         "user_id": user_id,
         "metadata": metadata,
         "iterations": 0,
