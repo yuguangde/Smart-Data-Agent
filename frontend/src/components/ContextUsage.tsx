@@ -2,12 +2,13 @@
  * ContextUsage — small footer showing current thread diagnostics.
  */
 import { useEffect, useState } from "react";
-import { Typography } from "antd";
+import { Button, Modal, Typography } from "antd";
 
-import { getThreadContextSize } from "@/api/chat";
+import { getThreadContextSize, getThreadSummary } from "@/api/chat";
 import type {
   ChatMessage,
   ThreadContextSizeResponse,
+  ThreadSummaryResponse,
 } from "@/types/chat";
 
 const { Text } = Typography;
@@ -40,6 +41,9 @@ interface Props {
 
 export function ContextUsage({ threadId, messages, loading }: Props) {
   const [stats, setStats] = useState<ThreadContextSizeResponse | null>(null);
+  const [summary, setSummary] = useState<ThreadSummaryResponse | null>(null);
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [summaryLoading, setSummaryLoading] = useState(false);
 
   useEffect(() => {
     if (!threadId) {
@@ -61,6 +65,21 @@ export function ContextUsage({ threadId, messages, loading }: Props) {
       cancelled = true;
     };
   }, [threadId, messages.length, loading]);
+
+  const handleOpenSummary = async () => {
+    if (!threadId) return;
+    setSummaryOpen(true);
+    setSummaryLoading(true);
+    try {
+      const data = await getThreadSummary(threadId);
+      setSummary(data);
+    } catch (err) {
+      console.debug("summary fetch failed", err);
+      setSummary(null);
+    } finally {
+      setSummaryLoading(false);
+    }
+  };
 
   if (!threadId || !stats) {
     return <div style={{ height: 16, marginTop: 4 }} />;
@@ -93,6 +112,40 @@ export function ContextUsage({ threadId, messages, loading }: Props) {
           （{ratio}%）
         </span>
       </Text>
+      <Button
+        type="link"
+        size="small"
+        style={{ fontSize: 12, padding: "0 0 0 8px", height: "auto" }}
+        onClick={handleOpenSummary}
+      >
+        查看总结
+      </Button>
+
+      <Modal
+        title="会话总结"
+        open={summaryOpen}
+        onCancel={() => setSummaryOpen(false)}
+        footer={null}
+        width={600}
+      >
+        {summaryLoading ? (
+          <Text type="secondary">加载中…</Text>
+        ) : summary ? (
+          <pre
+            style={{
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              margin: 0,
+              fontSize: 14,
+              lineHeight: 1.6,
+            }}
+          >
+            {summary.summary}
+          </pre>
+        ) : (
+          <Text type="secondary">暂无总结</Text>
+        )}
+      </Modal>
     </div>
   );
 }

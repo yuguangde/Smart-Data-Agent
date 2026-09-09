@@ -20,6 +20,7 @@ from app.api.schemas import (
     ToolApprovalResume,
 )
 from app.config import get_settings
+from app.memory.summary_store import get_summary_store
 from app.services.agent_service import (
     get_history,
     get_thread_context_stats,
@@ -187,5 +188,22 @@ async def get_thread(thread_id: str) -> ThreadHistory:
 async def get_thread_context_size(thread_id: str) -> dict[str, Any]:
     """Return approximate token/char statistics for the thread's context."""
     return await get_thread_context_stats(thread_id)
+
+
+@router.get(
+    "/threads/{thread_id}/summary",
+    summary="Get the persisted summary for a thread",
+)
+async def get_thread_summary(thread_id: str) -> dict[str, Any]:
+    """Return the stored conversation summary, if any."""
+    store = get_summary_store()
+    if store is None:
+        raise HTTPException(
+            status_code=503, detail="summary store is not enabled"
+        )
+    summary = await store.get_summary(thread_id)
+    if summary is None:
+        raise HTTPException(status_code=404, detail="no summary found")
+    return summary
 
 

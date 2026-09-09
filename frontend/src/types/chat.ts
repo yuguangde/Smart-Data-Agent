@@ -132,3 +132,12 @@ export interface ThreadContextSizeResponse {
   total_tokens: number;
   raw_checkpoint_bytes: number;
 }
+
+/** Response body for `GET /threads/{thread_id}/summary`. */
+export interface ThreadSummaryResponse {
+  thread_id: string;
+  summary: string;
+  summarized_up_to: string;
+  generated_at: string;
+  model: string | null;
+}

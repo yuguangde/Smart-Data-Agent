@@ -13,6 +13,7 @@ import type {
   ThreadContextSizeResponse,
   ThreadCreateResponse,
   ThreadHistoryResponse,
+  ThreadSummaryResponse,
 } from "@/types/chat";
 
 /** Resolved at build time via Vite (`VITE_API_BASE`). Defaults to `/api`. */
@@ -54,6 +55,16 @@ export async function getThreadContextSize(
     `${API_BASE}/threads/${encodeURIComponent(threadId)}/context-size`,
   );
   return parseJson<ThreadContextSizeResponse>(res);
+}
+
+/** Fetch the persisted summary for a thread, if one exists. */
+export async function getThreadSummary(
+  threadId: string,
+): Promise<ThreadSummaryResponse> {
+  const res = await fetch(
+    `${API_BASE}/threads/${encodeURIComponent(threadId)}/summary`,
+  );
+  return parseJson<ThreadSummaryResponse>(res);
 }
 
 /** Cancellable handle returned by {@link sendChatStream}. */
