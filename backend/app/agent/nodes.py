@@ -195,6 +195,8 @@ async def _call_llm(
     chat: "BaseChatModel",
     system_prompt: str,
     thread_id: str | None = None,
+    *,
+    final_turn: bool = False,
 ) -> AIMessage:
     """Run the LLM with the system prompt and optional stale summary injected."""
     # Keep only messages inside the retention window and start with a user turn.
@@ -202,6 +204,14 @@ async def _call_llm(
 
     # Inject system prompt exactly once, at the front.
     llm_messages: list[BaseMessage] = [SystemMessage(content=system_prompt)]
+    if final_turn:
+        # When this is the last allowed iteration, force the model to answer
+        # directly instead of emitting tool_calls that will never be executed.
+        llm_messages.append(
+            SystemMessage(
+                content="注意：你已达到本次请求的最大迭代次数。请基于已获得的工具结果直接给出最终回答，不要再发起新的工具调用。"
+            )
+        )
 
     # If a persisted summary exists for older context, add it after the prompt.
     if thread_id:
@@ -236,6 +246,10 @@ def make_agent_node():
     cleanly.
     """
     chat, tools = _build_model_with_tools()
+    # Build a tool-free model for the final iteration so the agent is forced to
+    # synthesize an answer instead of emitting tool_calls that the graph would
+    # truncate because of MAX_ITERATIONS.
+    chat_final = get_llm()
     # Serialize tool execution to avoid empty outputs caused by parallel MCP
     # invocations under a shared session.
     raw_tool_node = ToolNode(
@@ -249,8 +263,18 @@ def make_agent_node():
         config: RunnableConfig,
     ) -> AgentState:
         thread_id = config.get("configurable", {}).get("thread_id") if config else None
+        settings = get_settings()
+        iterations = state.get("iterations", 0)
+        is_last_turn = iterations + 1 >= settings.max_iterations
+        # On the last allowed iteration, bind no tools and tell the model to
+        # answer directly, preventing unfulfilled tool_calls at graph end.
+        current_chat = chat_final if is_last_turn else chat
         response: AIMessage = await _call_llm(
-            state, chat, system_prompt, thread_id=thread_id
+            state,
+            current_chat,
+            system_prompt,
+            thread_id=thread_id,
+            final_turn=is_last_turn,
         )
         # Timestamp the assistant message for retention policy.
         response.additional_kwargs = {
@@ -259,7 +283,7 @@ def make_agent_node():
         }
         return {
             "messages": [response],
-            "iterations": state.get("iterations", 0) + 1,
+            "iterations": iterations + 1,
         }
 
     async def tool_node(state: AgentState) -> AgentState:
