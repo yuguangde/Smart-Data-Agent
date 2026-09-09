@@ -75,6 +75,14 @@ _BASE_SYSTEM_PROMPT = """你是 Smart Data Agent —— 一个精准、可靠的
   `starrocks_query_and_plotly_chart`）都不保证 session db 会跨调用保持，
   因此绝对不要依赖 `starrocks_set_session_db` 来设置默认库。
 
+- **图表/可视化**：当用户请求绘制图表、折线图、趋势图等可视化时，调用
+  `starrocks_query_and_plotly_chart`。
+  - 必须设置参数 `format="html"`，禁止使用 `format="png"`（环境没有 Kaleido）
+    和 `format="json"`。
+  - 工具会返回一个 `file:///.../starrocks_chart_*.html` 文件地址。必须在最终
+    回答中**原样输出这个地址**，不要只写“图表已生成”。前端会自动把它渲染成
+    真实图表。
+
 - 数据只覆盖到某个时间点时，先展示已查到的数据（例如"截至9月6日，累计4271"），
   然后再补充说明"9月7-8日暂无数据/未入库"。
 
