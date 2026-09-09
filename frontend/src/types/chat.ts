@@ -118,3 +118,17 @@ export interface DonePayload {
 
 /** Wire payload for the `error` SSE frame. */
 export type ErrorEventPayload = string | { message?: string; detail?: string };
+
+/** Response body for `GET /threads/{thread_id}/context-size`. */
+export interface ThreadContextSizeResponse {
+  thread_id: string;
+  message_count: number;
+  tool_call_count: number;
+  system_prompt_chars: number;
+  system_prompt_tokens: number;
+  messages_chars: number;
+  messages_tokens: number;
+  total_chars: number;
+  total_tokens: number;
+  raw_checkpoint_bytes: number;
+}

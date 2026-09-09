@@ -31,6 +31,7 @@ import zhCN from "antd/locale/zh_CN";
 import "antd/dist/reset.css";
 
 import { ChatList } from "@/components/ChatList";
+import { ContextUsage } from "@/components/ContextUsage";
 import { SenderBox } from "@/components/SenderBox";
 import { Sidebar } from "@/components/Sidebar";
 import { useChatStore } from "@/store/useChatStore";
@@ -166,6 +167,11 @@ export default function App() {
                 }}
                 onApprove={approveTool}
                 onStop={stop}
+              />
+              <ContextUsage
+                threadId={threadId}
+                messages={messages}
+                loading={loading}
               />
             </Footer>
           </Layout>

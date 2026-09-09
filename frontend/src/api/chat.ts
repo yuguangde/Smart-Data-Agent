@@ -10,6 +10,7 @@
 import type {
   SendMessageBody,
   StreamEvent,
+  ThreadContextSizeResponse,
   ThreadCreateResponse,
   ThreadHistoryResponse,
 } from "@/types/chat";
@@ -43,6 +44,16 @@ export async function fetchHistory(
     `${API_BASE}/threads/${encodeURIComponent(threadId)}`,
   );
   return parseJson<ThreadHistoryResponse>(res);
+}
+
+/** Fetch approximate context-size statistics for a thread. */
+export async function getThreadContextSize(
+  threadId: string,
+): Promise<ThreadContextSizeResponse> {
+  const res = await fetch(
+    `${API_BASE}/threads/${encodeURIComponent(threadId)}/context-size`,
+  );
+  return parseJson<ThreadContextSizeResponse>(res);
 }
 
 /** Cancellable handle returned by {@link sendChatStream}. */
