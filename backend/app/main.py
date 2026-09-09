@@ -7,6 +7,7 @@ Run via::
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import Any
@@ -17,8 +18,10 @@ from fastapi.responses import JSONResponse
 
 from app.agent.graph import get_compiled_graph
 from app.api import api_router
-from app.config import get_settings
+from app.config import CheckpointerKind, get_settings
 from app.memory.checkpointer import build_checkpointer, shutdown_checkpointer
+from app.memory.summary_store import init_summary_store
+from app.tasks.summarizer import start_summarizer_task
 from app.tools.mcp_loader import init_mcp_tools, shutdown_mcp
 
 logger = logging.getLogger(__name__)
@@ -59,9 +62,23 @@ async def lifespan(app: FastAPI):
     get_compiled_graph.cache_clear()
     get_compiled_graph()
 
+    # Initialize optional summary store for SQLite-backed deployments.
+    await init_summary_store()
+
+    # Start background task that periodically summarizes stale conversations.
+    summarizer_task: asyncio.Task[None] | None = None
+    if settings.checkpointer == CheckpointerKind.SQLITE:
+        summarizer_task = await start_summarizer_task()
+
     try:
         yield
     finally:
+        if summarizer_task is not None:
+            summarizer_task.cancel()
+            try:
+                await summarizer_task
+            except asyncio.CancelledError:
+                pass
         await shutdown_mcp()
         await shutdown_checkpointer()
 

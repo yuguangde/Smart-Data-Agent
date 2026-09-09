@@ -13,9 +13,11 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
+from langchain_core.runnables import RunnableConfig
 from langgraph.prebuilt import ToolNode
 
 from app.agent.prompts import build_system_prompt
+from app.memory.summary_store import get_summary_store
 from app.agent.review import SENSITIVE_TOOL_NAMES
 from app.agent.state import AgentState
 from app.config import get_settings
@@ -141,19 +143,37 @@ async def _call_llm(
     state: AgentState,
     chat: "BaseChatModel",
     system_prompt: str,
+    thread_id: str | None = None,
 ) -> AIMessage:
-    """Run the LLM with the system prompt injected on the first turn."""
+    """Run the LLM with the system prompt and optional stale summary injected."""
     # Keep only messages inside the retention window and start with a user turn.
     messages = _filter_recent_messages(list(state.get("messages", [])))
 
     # Inject system prompt exactly once, at the front.
-    if not messages or not isinstance(messages[0], SystemMessage):
-        messages = [SystemMessage(content=system_prompt), *messages]
+    llm_messages: list[BaseMessage] = [SystemMessage(content=system_prompt)]
+
+    # If a persisted summary exists for older context, add it after the prompt.
+    if thread_id:
+        summary_store = get_summary_store()
+        if summary_store is not None:
+            try:
+                summary_row = await summary_store.get_summary(thread_id)
+            except Exception as exc:
+                logger.warning("Failed to load summary for %s: %s", thread_id, exc)
+                summary_row = None
+            if summary_row:
+                summary_msg = SystemMessage(
+                    content=f"历史会话摘要：\n{summary_row['summary'].strip()}",
+                    additional_kwargs={"is_summary": True},
+                )
+                llm_messages.append(summary_msg)
+
+    llm_messages.extend(messages)
 
     # Use async invoke so LangGraph's astream_events() emits per-token
     # ``on_chat_model_stream`` events; the sync .invoke() blocks the event
     # loop and causes ``message → done → end`` with zero ``token`` frames.
-    return await chat.ainvoke(messages)
+    return await chat.ainvoke(llm_messages)
 
 
 def make_agent_node():
@@ -173,8 +193,14 @@ def make_agent_node():
     marshal_node = make_marshal_node()
     system_prompt = build_system_prompt(tools)
 
-    async def agent_node(state: AgentState) -> AgentState:
-        response: AIMessage = await _call_llm(state, chat, system_prompt)
+    async def agent_node(
+        state: AgentState,
+        config: RunnableConfig,
+    ) -> AgentState:
+        thread_id = config.get("configurable", {}).get("thread_id") if config else None
+        response: AIMessage = await _call_llm(
+            state, chat, system_prompt, thread_id=thread_id
+        )
         # Timestamp the assistant message for retention policy.
         response.additional_kwargs = {
             **(response.additional_kwargs or {}),

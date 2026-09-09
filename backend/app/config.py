@@ -113,6 +113,10 @@ class Settings(BaseSettings):
 
     max_tokens: int = Field(default=2048)
     max_iterations: int = Field(default=8)
+    summary_interval_seconds: int = Field(
+        default=3600,
+        description="Interval between background conversation summarization tasks.",
+    )
 
     # -------- Memory --------
     checkpointer: CheckpointerKind = Field(default=CheckpointerKind.MEMORY)

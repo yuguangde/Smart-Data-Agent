@@ -1,0 +1,381 @@
+semantic_model:
+- name: crm_man_service_level
+  major: true
+  description: 基于zfcdm_cc.dwd_crm_man_call_detail_di表构建的人工服务水平语义模型，以话务明细粒度收口服务水平核心指标，支撑热线/在线渠道服务水平多维分析和监控。服务水平=30秒内接通量/流入量。
+  display_name: 人工服务水平语义模型
+  data_owner: 245364
+  biz_owner: 474888
+  arch_domain_id: 200913201
+  custom_extensions:
+  - data: "{\n  \"archDomainPath\" : \"/客权/决策应用层\"\n}"
+    vendor_name: DATAPHIN
+  datasets:
+  - name: call_detail
+    source: zfcdm_cc.dwd_crm_man_call_detail_di
+    fields:
+    - name: acw_time
+      display_name: 后处理时长
+      description: 坐席后处理时长，单位秒
+    - name: agent_nick_name
+      display_name: 小二花名
+      description: 坐席花名
+    - name: business_name
+      dimensions:
+      - business_name
+      display_name: 一级服务线
+      description: 一级服务线名称
+    - name: business_name_level2
+      dimensions:
+      - business_name_level2
+      display_name: 二级服务线
+      description: 二级服务线名称
+    - name: call_type
+      dimensions:
+      - call_type
+      display_name: 呼叫方向
+      description: 呼入或呼出
+    - name: channel
+      dimensions:
+      - channel
+      display_name: 渠道
+      description: 话务渠道，热线或在线
+    - name: dt
+      dimensions:
+      - dt
+      display_name: 业务日期
+      description: 分区字段，格式yyyyMMdd
+    - name: gmt_queue_in
+      display_name: 进入队列时间
+      description: 用户进入排队队列的时间
+    - name: gmt_queue_out
+      display_name: 离开队列时间
+      description: 用户离开排队队列的时间
+    - name: id
+      display_name: 主键
+      description: 话务记录主键
+    - name: is_connected
+      display_name: 是否接通
+      description: 1接通 0未接通
+    - name: market_stat_flag
+      display_name: 是否计入大盘
+      description: 1计入 0不计入
+    - name: queued_time
+      display_name: 队列等待时长
+      description: 用户在队列中等待时长，单位秒
+    - name: ring_time
+      display_name: 振铃时长
+      description: 坐席振铃时长，单位秒
+    - name: service_skill_group_name
+      dimensions:
+      - service_skill_group_name
+      display_name: 技能组名称
+      description: 技能组名称
+    - name: service_time
+      display_name: 服务时长
+      description: 通话时长+后处理时长，单位秒
+    - name: skill_project_name
+      dimensions:
+      - skill_project_name
+      display_name: 站点
+      description: 技能组归属站点
+    - name: skill_resource_channel
+      dimensions:
+      - skill_resource_channel
+      display_name: 承接资源
+      description: 技能组对应的资源
+    - name: ssp_standard
+      dimensions:
+      - ssp_standard
+      display_name: 承接方
+      description: 承接方
+    - name: talk_time
+      display_name: 通话时长
+      description: 坐席与用户通话时长，单位秒
+    - name: transfer_flag
+      dimensions:
+      - transfer_flag
+      display_name: 流入方式
+      description: 直流/转入/溢流/外呼
+    primary_key:
+    - id
+    - dt
+    description: 人工呼入呼出明细表，包含热线和在线渠道的话务基础信息、坐席信息、技能组信息、时长信息等
+  dimensions:
+  - name: business_name
+    display_name: 业务线_技能组归属
+    data_type: string
+    description: '(1) 技能组归属业务线，接通率、在线接通率、热线接通率指标拆业务线时，使用本维度。要严格遵守！！！
+
+      (2) 在实际使用中，兼容真实枚举值和用户输入的别名 （真实枚举值 = 用户输入的别名），如下：
+
+      支付宝客户中心 = ACC
+
+      支付宝客户中心 = acc
+
+      消金&网商客户中心 = 网消
+
+      财富&保险客户中心 = 财保
+
+      国际服务部 = 国际'
+    is_time: false
+  - name: business_name_level2
+    display_name: 二级业务线_技能组归属
+    data_type: string
+    description: "(1) 技能组归属二级业务线，接通率、在线接通率、热线接通率指标拆业务线时，使用本维度。要严格遵守！！！\n(2) 在实际使用中，兼容真实枚举值和用户输入的别名 （真实枚举值 = 用户输入的别名），如下：\n消费者服务线 = 消费者线\n消费信贷 = 消金\n信贷服催共享中心 = 服催 \n保险线 = 保险\n网商银行 = 网商\n经营者服务线 = 经营者线\n理财线 = 财富\n理财线 = 理财\n非大陆服务线 = 非大陆\n芝麻信用线 = 芝麻"
+    is_time: false
+  - name: business_name_level3
+    display_name: 三级业务线_技能组归属
+    description: '(1) 技能组归属三级业务线，接通率、在线接通率、热线接通率指标拆业务线时，使用本维度。要严格遵守！！！
+
+      (2) 在实际使用中，兼容真实枚举值和用户输入的别名 （真实枚举值 = 用户输入的别名），如下：
+
+      花呗线 = 花呗
+
+      借呗线 = 借呗'
+  - name: call_type
+    values:
+    - 呼入
+    - 呼出
+    display_name: 呼叫方向
+    data_type: string
+    description: 呼叫方向，呼入或呼出
+    is_time: false
+  - name: channel
+    values:
+    - 热线
+    - 在线
+    display_name: 渠道
+    data_type: string
+    description: 话务渠道，热线或在线
+    is_time: false
+  - name: dt
+    granularity: day
+    display_name: 业务日期
+    data_type: string
+    description: 业务日期，分区字段，格式yyyyMMdd
+    is_time: true
+  - name: service_skill_group_name
+    display_name: 技能组名称
+    data_type: string
+    description: 技能组名称
+    is_time: false
+  - name: skill_project_name
+    display_name: 站点
+    data_type: string
+    description: 技能组归属站点
+    is_time: false
+  - name: skill_resource_channel
+    display_name: 承接资源
+    data_type: string
+    description: 技能组对应的资源
+    is_time: false
+  - name: ssp_standard
+    display_name: 承接方
+    data_type: string
+    description: 承接方，自营/驻场外包/离岸外包
+    is_time: false
+  - name: transfer_flag
+    display_name: 流入方式
+    data_type: string
+    description: 流入方式，直流/转入/溢流/外呼
+    is_time: false
+  filters:
+  - name: channel_limit
+    display_name: 渠道限定
+    expression: call_detail.channel in ('在线','热线')
+  - name: is_call_inbound
+    display_name: 呼入
+    expression: call_detail.call_type = '呼入'
+    description: 呼叫方向为呼入
+  - name: is_clive
+    display_name: 在线
+    expression: call_detail.channel='在线'
+  - name: is_connected
+    display_name: 已接通
+    expression: call_detail.is_connected = '1'
+    description: 是否接通，is_connected=1
+  - name: is_market_stat
+    display_name: 计入客权大盘
+    expression: call_detail.market_stat_flag = '1'
+    description: 是否计入客权大盘，market_stat_flag=1
+  - name: is_vq
+    display_name: 热线
+    expression: call_detail.channel='热线'
+  metrics:
+  - name: answer_rate
+    unit: 百分比
+    additivity:
+      type: non
+    filters:
+    - expression:
+        dialects:
+        - dialect: odps
+          expression: ${is_market_stat}
+    - expression:
+        dialects:
+        - dialect: odps
+          expression: ${is_call_inbound}
+    - expression:
+        dialects:
+        - dialect: odps
+          expression: ${channel_limit}
+    display_name: 接通率
+    description: 接通率 = 接通量 / 流入量
+    expression: SUM(IF(call_detail.is_connected = 1, 1, 0))/count(*)
+  - name: answer_rate_clive
+    unit: 百分比
+    filters:
+    - expression:
+        dialects:
+        - dialect: odps
+          expression: ${is_clive}
+    - expression:
+        dialects:
+        - dialect: odps
+          expression: ${is_call_inbound}
+    - expression:
+        dialects:
+        - dialect: odps
+          expression: ${is_market_stat}
+    display_name: 在线接通率
+    expression: SUM(IF(call_detail.is_connected = 1, 1, 0))/count(*)
+  - name: answer_rate_vq
+    unit: 百分比
+    filters:
+    - expression:
+        dialects:
+        - dialect: odps
+          expression: ${is_vq}
+    - expression:
+        dialects:
+        - dialect: odps
+          expression: ${is_call_inbound}
+    - expression:
+        dialects:
+        - dialect: odps
+          expression: ${is_market_stat}
+    display_name: 热线接通率
+    expression: SUM(IF(call_detail.is_connected = 1, 1, 0))/count(*)
+  - name: svc_level_daily_qualified_flag
+    unit: 天
+    additivity:
+      type: fully
+    filters:
+    - expression:
+        dialects:
+        - dialect: odps
+          expression: ${channel_limit}
+    - expression:
+        dialects:
+        - dialect: odps
+          expression: ${is_call_inbound}
+    - expression:
+        dialects:
+        - dialect: odps
+          expression: ${is_market_stat}
+    display_name: 每日服务水平达标标记
+    description: 按dt+维度聚合时，当日服务水平是否达标（≥0.85）。 口径：IF(SUM(IF(is_connected=1 AND queued_time+ring_time<=30,1,0))/COUNT(*) >= 0.85, 1, 0)。 注意：此指标必须配合dt维度使用，表示该分组日是否达标，跨dt SUM 即为达标天数。
+    expression: IF(SUM(IF(call_detail.is_connected = '1' AND COALESCE(CAST(call_detail.queued_time AS BIGINT), 0) + COALESCE(CAST(call_detail.ring_time AS BIGINT), 0) <= 30, 1, 0)) / COUNT(*) >= 0.85, 1, 0)
+    ai_context:
+      synonyms:
+      - 服水达标标记
+      - 日达标标记
+  - name: svc_level_qualified_days
+    unit: 天
+    additivity:
+      type: fully
+    filters:
+    - expression:
+        dialects:
+        - dialect: odps
+          expression: ${channel_limit}
+    - expression:
+        dialects:
+        - dialect: odps
+          expression: ${is_call_inbound}
+    - expression:
+        dialects:
+        - dialect: odps
+          expression: ${is_market_stat}
+    display_name: 服水达标天数
+    description: 在选定时间范围内，服务水平达标（≥0.85）的天数。 口径：SUM(每日服务水平达标标记)。 使用方式：查询时需按dt维度先聚合，再跨dt求和。
+    expression: SUM(IF(SUM(IF(call_detail.is_connected = '1' AND COALESCE(CAST(call_detail.queued_time AS BIGINT), 0) + COALESCE(CAST(call_detail.ring_time AS BIGINT), 0) <= 30, 1, 0)) / COUNT(*) >= 0.85, 1, 0))
+    ai_context:
+      synonyms:
+      - 服水达标天数
+      - 达标天数
+  - name: svc_level_qualified_days_rate
+    unit: 百分比
+    additivity:
+      type: non
+    filters:
+    - expression:
+        dialects:
+        - dialect: odps
+          expression: ${channel_limit}
+    - expression:
+        dialects:
+        - dialect: odps
+          expression: ${is_call_inbound}
+    - expression:
+        dialects:
+        - dialect: odps
+          expression: ${is_market_stat}
+    display_name: 服水达标天数占比
+    description: 服水达标天数占比 = 服水达标天数 / 总天数。 达标定义：当日服务水平（30秒内接通量/流入量）≥ 0.85。 典型场景：选定时间范围（如月度），计算该范围内有多少天的服务水平达到85%标准。 注意：此为非可加指标，不可跨维度直接下钻求和。
+    expression: ${svc_level_qualified_days} / NULLIF(${total_days}, 0)
+    ai_context:
+      synonyms:
+      - 服务水平达标天数占比
+      - 服水区间达标率
+      - 服务水平区间达标率
+  - name: svc_level_rate
+    unit: 百分比
+    additivity:
+      type: non
+    filters:
+    - expression:
+        dialects:
+        - dialect: odps
+          expression: ${channel_limit}
+    - expression:
+        dialects:
+        - dialect: odps
+          expression: ${is_call_inbound}
+    - expression:
+        dialects:
+        - dialect: odps
+          expression: ${is_market_stat}
+    display_name: 服务水平
+    description: 当指标值小于0.85的时候要高亮出来
+    expression: SUM(IF(call_detail.is_connected = '1' AND COALESCE(CAST(call_detail.queued_time AS BIGINT), 0) + COALESCE(CAST(call_detail.ring_time AS BIGINT), 0) <= 30, 1, 0))/count(*)
+    ai_context:
+      synonyms:
+      - 服水
+      - 30s接通率
+      - 30S接通率
+  - name: svc_level_unqualified_days
+    additivity:
+      type: non
+    display_name: 服水未达标天数
+    expression: ${total_days}-${svc_level_qualified_days}
+  - name: total_days
+    unit: 天
+    additivity:
+      type: fully
+    filters:
+    - expression:
+        dialects:
+        - dialect: odps
+          expression: ${channel_limit}
+    - expression:
+        dialects:
+        - dialect: odps
+          expression: ${is_call_inbound}
+    - expression:
+        dialects:
+        - dialect: odps
+          expression: ${is_market_stat}
+    display_name: 总天数
+    description: 在选定时间范围内的总天数（按dt去重计数）。
+    expression: COUNT(DISTINCT call_detail.dt)
