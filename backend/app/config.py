@@ -192,6 +192,13 @@ class Settings(BaseSettings):
             "Empty disables auth (acceptable for trusted local MCP servers)."
         ),
     )
+    mcp_chart_allowed_roots: str = Field(
+        default="",
+        description=(
+            "Comma-separated list of extra filesystem roots allowed for chart proxying. "
+            "If empty, only tempfile.gettempdir() is allowed."
+        ),
+    )
 
     # -------- LangSmith --------
     langsmith_tracing: bool = Field(default=False)

@@ -13,6 +13,7 @@ The full service surface is therefore:
 """
 from fastapi import APIRouter
 
+from app.api.charts import router as charts_router
 from app.api.chat import router as chat_router
 from app.api.ws import router as ws_router
 
@@ -21,5 +22,6 @@ from app.api.ws import router as ws_router
 api_router = APIRouter(prefix="/api")
 api_router.include_router(chat_router)
 api_router.include_router(ws_router)
+api_router.include_router(charts_router)
 
 __all__ = ["api_router"]

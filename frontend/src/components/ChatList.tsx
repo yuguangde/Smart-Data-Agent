@@ -17,6 +17,7 @@ import { useEffect, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ChatMessage, ToolCall } from "@/types/chat";
+import { ChartIframe, extractChartProxyUrl } from "./ChartRenderer";
 
 const { Text } = Typography;
 
@@ -151,7 +152,16 @@ function ToolCallCard({ tc }: { tc: ToolCall }) {
           <summary style={{ cursor: "pointer", color: "#1677ff" }}>
             输出结果
           </summary>
-          <pre className="tool-call-pre">{tc.output}</pre>
+          {(() => {
+            const chartUrl = extractChartProxyUrl(tc.output);
+            return chartUrl ? (
+              <div style={{ marginTop: 8 }}>
+                <ChartIframe src={chartUrl} />
+              </div>
+            ) : (
+              <pre className="tool-call-pre">{tc.output}</pre>
+            );
+          })()}
         </details>
       ) : null}
     </Card>
