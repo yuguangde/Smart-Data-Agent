@@ -35,3 +35,6 @@ semantic_model:
         display_name: 业务日期
         description: 业务日期，分区字段，格式 yyyyMMdd
         is_time: true
+      - name: channel
+        data_type: string
+        display_name: 渠道

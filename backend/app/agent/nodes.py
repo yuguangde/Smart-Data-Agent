@@ -11,6 +11,7 @@ from langgraph.prebuilt import ToolNode
 from app.agent.prompts import build_system_prompt
 from app.agent.review import SENSITIVE_TOOL_NAMES
 from app.agent.state import AgentState
+from app.config import get_settings
 from app.llm.factory import get_llm
 from app.tools import get_llm_tools, get_program_only_tool_names
 
@@ -28,9 +29,20 @@ _TOOL_CALL_SERIAL_LOCK = asyncio.Lock()
 
 
 async def _serializing_awrap_tool_call(request, execute):
-    """Wrapper that executes each tool call under a global async lock."""
+    """Wrapper that executes each tool call under a global async lock.
+
+    Also enforces ``mcp_call_timeout_seconds`` so a hanging StarRocks/MCP call
+    does not leave the graph stuck at a pending tool_call forever.
+    """
+    settings = get_settings()
+    timeout = max(settings.mcp_call_timeout_seconds, 1.0)
+
     async with _TOOL_CALL_SERIAL_LOCK:
-        return await execute(request)
+        try:
+            return await asyncio.wait_for(execute(request), timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.warning("Tool call timed out after %.1fs", timeout)
+            return f"工具调用超时（>{timeout}s），未获得响应"
 
 
 def _build_model_with_tools() -> tuple["BaseChatModel", list["BaseTool"]]:
