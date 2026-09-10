@@ -1,6 +1,6 @@
 /**
- * ReviewPanel — side drawer that shows the primary report, the review-agent
- * report, and the structured comparison result.
+ * ReviewPanel — side drawer that shows the review-agent report and the
+ * structured comparison result.
  */
 import { LoadingOutlined } from "@ant-design/icons";
 import { Alert, Badge, Card, Drawer, Spin, Typography } from "antd";
@@ -52,7 +52,6 @@ export interface ReviewPanelProps extends ReviewStore {
 export function ReviewPanel({
   visible,
   loading,
-  mainReport,
   reviewReport,
   comparison,
   error,
@@ -98,9 +97,6 @@ export function ReviewPanel({
                 <Badge color={severityColor(d.severity)} text={d.severity} />
               </div>
               <Paragraph type="secondary" style={{ margin: 0 }}>
-                主报告：{d.main || "—"}
-              </Paragraph>
-              <Paragraph type="secondary" style={{ margin: 0 }}>
                 复核报告：{d.review || "—"}
               </Paragraph>
             </div>
@@ -108,42 +104,24 @@ export function ReviewPanel({
         </Card>
       )}
 
-      <div style={{ display: "flex", gap: 16 }}>
-        <Card
-          title="主报告"
-          size="small"
-          style={{ flex: 1, minWidth: 0 }}
-          bodyStyle={{ maxHeight: 480, overflow: "auto" }}
-        >
-          <div className="markdown-body">
-            {mainReport ? (
-              <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{mainReport}</pre>
-            ) : (
-              <Text type="secondary">暂无主报告</Text>
-            )}
-          </div>
-        </Card>
-
-        <Card
-          title={
-            <span>
-              复核报告{" "}
-              {loading && <Spin indicator={<LoadingOutlined spin />} size="small" />}
-            </span>
-          }
-          size="small"
-          style={{ flex: 1, minWidth: 0 }}
-          bodyStyle={{ maxHeight: 480, overflow: "auto" }}
-        >
-          <div className="markdown-body">
-            {reviewReport ? (
-              <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{reviewReport}</pre>
-            ) : (
-              <Text type="secondary">{loading ? "复核中…" : "暂无复核报告"}</Text>
-            )}
-          </div>
-        </Card>
-      </div>
+      <Card
+        title={
+          <span>
+            复核报告{" "}
+            {loading && <Spin indicator={<LoadingOutlined spin />} size="small" />}
+          </span>
+        }
+        size="small"
+        bodyStyle={{ maxHeight: 480, overflow: "auto" }}
+      >
+        <div className="markdown-body">
+          {reviewReport ? (
+            <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{reviewReport}</pre>
+          ) : (
+            <Text type="secondary">{loading ? "复核中…" : "暂无复核报告"}</Text>
+          )}
+        </div>
+      </Card>
     </Drawer>
   );
 }
