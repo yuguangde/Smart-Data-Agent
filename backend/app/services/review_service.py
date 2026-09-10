@@ -17,7 +17,7 @@ from app.agent.nodes import _utc_now_iso
 from app.agent.review_graph import get_compiled_review_graph
 from app.config import get_settings
 from app.memory.review_store import get_review_store
-from app.services.agent_service import _last_ai_message, _plain_str
+from app.services.agent_service import _plain_str
 
 logger = logging.getLogger(__name__)
 
@@ -182,10 +182,16 @@ async def stream_review(
                 output = data.get("output", {})
                 if hasattr(output, "values"):
                     output = output.values
-                last = _last_ai_message(output) if isinstance(output, dict) else None
-                if last:
-                    yield {"event": "review_message", "data": last}
-                    review_report = _plain_str(last.get("content", ""))
+                if isinstance(output, dict):
+                    try:
+                        _, report_text = _last_report(output.get("messages", []))
+                        review_report = report_text
+                        yield {
+                            "event": "review_message",
+                            "data": {"role": "assistant", "content": report_text},
+                        }
+                    except ValueError:
+                        pass
                 yield {
                     "event": "review_done",
                     "data": {"review_thread_id": review_thread_id},
@@ -195,6 +201,22 @@ async def stream_review(
         logger.exception("Review streaming failed: %s", exc)
         yield {"event": "review_error", "data": str(exc)}
         return
+
+    if not review_report:
+        # Fallback: read the final state directly in case the chain_end event
+        # did not carry the report (e.g. graph hit max_iterations before the
+        # event payload was emitted).
+        try:
+            snapshot = await graph.aget_state(config)
+            values = getattr(snapshot, "values", None) or {}
+            _, report_text = _last_report(values.get("messages", []))
+            review_report = report_text
+        except Exception as exc:
+            logger.warning(
+                "Failed to read final review report from graph state for %s: %s",
+                review_thread_id,
+                exc,
+            )
 
     if review_report:
         try:
