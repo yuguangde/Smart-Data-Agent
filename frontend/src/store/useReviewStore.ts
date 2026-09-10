@@ -19,6 +19,7 @@ export interface ReviewState {
   loading: boolean;
   mainReport: string;
   reviewReport: string;
+  reviewThreadId: string;
   toolCalls: ToolCall[];
   comparison: ReviewComparisonPayload | null;
   error: string | null;
@@ -37,6 +38,7 @@ const INITIAL_STATE: ReviewState = {
   loading: false,
   mainReport: "",
   reviewReport: "",
+  reviewThreadId: "",
   toolCalls: [],
   comparison: null,
   error: null,
@@ -99,6 +101,9 @@ export function useReviewStore(): ReviewStore {
 
         if (event === "review_started") {
           started = true;
+          const payload = data as { review_thread_id?: string };
+          const reviewThreadId = payload?.review_thread_id ?? "";
+          setState((s) => ({ ...s, reviewThreadId }));
           return;
         }
 

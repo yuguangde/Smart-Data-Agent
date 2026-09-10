@@ -54,13 +54,23 @@ export function ReviewPanel({
   visible,
   loading,
   reviewReport,
+  reviewThreadId,
   comparison,
   error,
   onClose,
 }: ReviewPanelProps) {
   return (
     <Drawer
-      title="报告复核"
+      title={
+        <span>
+          报告复核
+          {reviewThreadId && (
+            <Text type="secondary" style={{ marginLeft: 12, fontSize: 12 }}>
+              {reviewThreadId}
+            </Text>
+          )}
+        </span>
+      }
       placement="right"
       width={900}
       onClose={onClose}
