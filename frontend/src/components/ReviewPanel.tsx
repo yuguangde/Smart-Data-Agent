@@ -5,6 +5,7 @@
 import { LoadingOutlined } from "@ant-design/icons";
 import { Alert, Badge, Card, Drawer, Spin, Typography } from "antd";
 
+import { ChartMarkdown } from "@/components/ChartRenderer";
 import type { ReviewStore } from "@/store/useReviewStore";
 
 const { Paragraph, Text } = Typography;
@@ -116,7 +117,7 @@ export function ReviewPanel({
       >
         <div className="markdown-body">
           {reviewReport ? (
-            <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{reviewReport}</pre>
+            <ChartMarkdown content={reviewReport} />
           ) : (
             <Text type="secondary">{loading ? "复核中…" : "暂无复核报告"}</Text>
           )}
