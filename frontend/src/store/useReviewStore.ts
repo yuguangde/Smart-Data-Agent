@@ -6,7 +6,7 @@
  */
 import { useCallback, useRef, useState } from "react";
 
-import { sendReviewStream } from "@/api/chat";
+import { fetchLatestReview, sendReviewStream } from "@/api/chat";
 import type { ChatStreamHandle } from "@/api/chat";
 import type {
   ReviewComparisonPayload,
@@ -30,6 +30,7 @@ export interface ReviewStore extends ReviewState {
   closeReview: () => void;
   resetReview: () => void;
   runReview: (threadId: string) => void;
+  loadLatestReview: (threadId: string) => Promise<boolean>;
   stopReview: () => void;
 }
 
@@ -185,12 +186,48 @@ export function useReviewStore(): ReviewStore {
     cancelRef.current = handle.cancel;
   }, []);
 
+  const loadLatestReview = useCallback(async (threadId: string): Promise<boolean> => {
+    if (cancelRef.current) {
+      cancelRef.current();
+      cancelRef.current = null;
+    }
+    bufferRef.current = "";
+    toolCallsRef.current = new Map();
+
+    setState((s) => ({
+      ...INITIAL_STATE,
+      visible: true,
+      loading: true,
+      mainReport: s.mainReport,
+    }));
+
+    try {
+      const review = await fetchLatestReview(threadId);
+      if (!review) {
+        return false;
+      }
+      setState((s) => ({
+        ...s,
+        loading: false,
+        reviewReport: review.review_report,
+        reviewThreadId: review.review_thread_id,
+        comparison: review.comparison,
+      }));
+      return true;
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      setState((s) => ({ ...s, loading: false, error: detail }));
+      return false;
+    }
+  }, []);
+
   return {
     ...state,
     openReview,
     closeReview,
     resetReview,
     runReview,
+    loadLatestReview,
     stopReview,
   };
 }

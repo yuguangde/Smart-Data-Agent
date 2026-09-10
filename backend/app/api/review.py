@@ -95,4 +95,33 @@ async def list_reviews(thread_id: str) -> list[ReviewSummary]:
     ]
 
 
+@router.get("/threads/{thread_id}/reviews/latest", response_model=ReviewResponse)
+async def get_latest_review(thread_id: str) -> ReviewResponse:
+    """Return the most recent stored review for a thread.
+
+    If no review exists, raise 404 so the caller can fall back to running
+    a fresh review stream.
+    """
+    _check_review_enabled()
+    store = get_review_store()
+    if store is None:
+        raise HTTPException(status_code=404, detail="No review store available")
+    row = await store.get_latest_review(thread_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="No review found for this thread")
+    comparison = row.get("comparison") or {}
+    return ReviewResponse(
+        primary_thread_id=row["thread_id"],
+        review_thread_id=row.get("review_thread_id") or row["review_id"],
+        user_question="",
+        main_report=row["main_report"],
+        review_report=row["review_report"],
+        comparison=ReviewComparison(
+            verdict=comparison.get("verdict", "partial"),
+            summary=comparison.get("summary", ""),
+            differences=comparison.get("differences", []),
+        ),
+    )
+
+
 __all__ = ["router"]

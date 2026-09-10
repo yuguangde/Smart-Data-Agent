@@ -21,6 +21,7 @@ _CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS thread_reviews (
     review_id          TEXT PRIMARY KEY,
     thread_id          TEXT NOT NULL,
+    review_thread_id   TEXT,
     strategy           TEXT NOT NULL,
     main_report        TEXT NOT NULL,
     review_report      TEXT NOT NULL,
@@ -29,6 +30,10 @@ CREATE TABLE IF NOT EXISTS thread_reviews (
     created_at         TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_thread_reviews_thread_id ON thread_reviews(thread_id);
+"""
+
+_MIGRATE_TABLE_SQL = """
+ALTER TABLE thread_reviews ADD COLUMN review_thread_id TEXT;
 """
 
 _store: "ReviewStore | None" = None
@@ -41,15 +46,21 @@ class ReviewStore:
         self._db_path = db_path
 
     async def ensure_schema(self) -> None:
-        """Create the review table if it does not exist."""
+        """Create the review table if it does not exist and migrate old tables."""
         async with aiosqlite.connect(self._db_path) as db:
             await db.executescript(_CREATE_TABLE_SQL)
+            try:
+                await db.execute(_MIGRATE_TABLE_SQL)
+            except Exception:
+                # Column already exists or other non-fatal migration issue.
+                pass
             await db.commit()
 
     async def save_review(
         self,
         *,
         thread_id: str,
+        review_thread_id: str,
         strategy: str,
         main_report: str,
         review_report: str,
@@ -62,11 +73,12 @@ class ReviewStore:
         async with aiosqlite.connect(self._db_path) as db:
             await db.execute(
                 "INSERT INTO thread_reviews "
-                "(review_id, thread_id, strategy, main_report, review_report, comparison, review_model, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "(review_id, thread_id, review_thread_id, strategy, main_report, review_report, comparison, review_model, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     review_id,
                     thread_id,
+                    review_thread_id,
                     strategy,
                     main_report,
                     review_report,
@@ -84,7 +96,7 @@ class ReviewStore:
         """Return review summaries for a thread, newest first."""
         async with aiosqlite.connect(self._db_path) as db:
             async with db.execute(
-                "SELECT review_id, thread_id, strategy, review_model, comparison, created_at "
+                "SELECT review_id, thread_id, review_thread_id, strategy, review_model, comparison, created_at "
                 "FROM thread_reviews WHERE thread_id = ? ORDER BY created_at DESC",
                 (thread_id,),
             ) as cursor:
@@ -92,18 +104,19 @@ class ReviewStore:
         result: list[dict[str, Any]] = []
         for row in rows:
             try:
-                comparison = json.loads(row[4])
+                comparison = json.loads(row[5])
             except Exception:
                 comparison = {}
             result.append(
                 {
                     "review_id": row[0],
                     "thread_id": row[1],
-                    "strategy": row[2],
-                    "review_model": row[3] or "",
+                    "review_thread_id": row[2] or "",
+                    "strategy": row[3],
+                    "review_model": row[4] or "",
                     "verdict": comparison.get("verdict", "partial"),
                     "summary": comparison.get("summary", ""),
-                    "created_at": row[5],
+                    "created_at": row[6],
                 }
             )
         return result
@@ -112,7 +125,7 @@ class ReviewStore:
         """Return a single review record by id."""
         async with aiosqlite.connect(self._db_path) as db:
             async with db.execute(
-                "SELECT review_id, thread_id, strategy, main_report, review_report, comparison, "
+                "SELECT review_id, thread_id, review_thread_id, strategy, main_report, review_report, comparison, "
                 "review_model, created_at FROM thread_reviews WHERE review_id = ?",
                 (review_id,),
             ) as cursor:
@@ -122,12 +135,37 @@ class ReviewStore:
         return {
             "review_id": row[0],
             "thread_id": row[1],
-            "strategy": row[2],
-            "main_report": row[3],
-            "review_report": row[4],
-            "comparison": json.loads(row[5]),
-            "review_model": row[6],
-            "created_at": row[7],
+            "review_thread_id": row[2] or "",
+            "strategy": row[3],
+            "main_report": row[4],
+            "review_report": row[5],
+            "comparison": json.loads(row[6]),
+            "review_model": row[7],
+            "created_at": row[8],
+        }
+
+    async def get_latest_review(self, thread_id: str) -> dict[str, Any] | None:
+        """Return the most recent review record for a thread, or None."""
+        async with aiosqlite.connect(self._db_path) as db:
+            async with db.execute(
+                "SELECT review_id, thread_id, review_thread_id, strategy, main_report, review_report, comparison, "
+                "review_model, created_at FROM thread_reviews WHERE thread_id = ? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (thread_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "review_id": row[0],
+            "thread_id": row[1],
+            "review_thread_id": row[2] or "",
+            "strategy": row[3],
+            "main_report": row[4],
+            "review_report": row[5],
+            "comparison": json.loads(row[6]),
+            "review_model": row[7],
+            "created_at": row[8],
         }
 
 

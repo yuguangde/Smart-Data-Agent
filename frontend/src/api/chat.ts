@@ -9,6 +9,7 @@
  */
 import type {
   ReviewRequestBody,
+  ReviewResponsePayload,
   SendMessageBody,
   StreamEvent,
   ThreadContextSizeResponse,
@@ -156,6 +157,22 @@ export function sendChatStream(
     promise,
     cancel: () => controller.abort(),
   };
+}
+
+/**
+ * Fetch the most recent stored review for a thread.
+ * Returns null if no review exists (404).
+ */
+export async function fetchLatestReview(
+  threadId: string,
+): Promise<ReviewResponsePayload | null> {
+  const res = await fetch(
+    `${API_BASE}/threads/${encodeURIComponent(threadId)}/reviews/latest`,
+  );
+  if (res.status === 404) {
+    return null;
+  }
+  return parseJson<ReviewResponsePayload>(res);
 }
 
 /**

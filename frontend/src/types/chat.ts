@@ -163,6 +163,16 @@ export interface ReviewComparisonPayload {
   differences: ReviewDifference[];
 }
 
+/** Response body for `GET /threads/{id}/reviews/latest`. */
+export interface ReviewResponsePayload {
+  primary_thread_id: string;
+  review_thread_id: string;
+  user_question: string;
+  main_report: string;
+  review_report: string;
+  comparison: ReviewComparisonPayload;
+}
+
 /** State kept in the store for a running/finished review. */
 export interface ReviewState {
   visible: boolean;

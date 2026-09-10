@@ -61,6 +61,13 @@ export default function App() {
 
   const review = useReviewStore();
 
+  const handleReview = async (targetThreadId: string) => {
+    const loaded = await review.loadLatestReview(targetThreadId);
+    if (!loaded) {
+      review.runReview(targetThreadId);
+    }
+  };
+
   const showWelcome = messages.length === 0 && !pendingHistory;
 
   return (
@@ -160,7 +167,7 @@ export default function App() {
                   messages={messages}
                   loading={loading}
                   threadId={threadId}
-                  onReview={review.runReview}
+                  onReview={handleReview}
                 />
               )}
             </Content>

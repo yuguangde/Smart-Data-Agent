@@ -90,6 +90,7 @@ async def run_review(
         try:
             await store.save_review(
                 thread_id=thread_id,
+                review_thread_id=review_thread_id,
                 strategy=strategy,
                 main_report=main_report,
                 review_report=review_report,
@@ -213,6 +214,7 @@ async def stream_review(
             try:
                 await store.save_review(
                     thread_id=thread_id,
+                    review_thread_id=review_thread_id,
                     strategy=strategy,
                     main_report=main_report,
                     review_report=review_report,
