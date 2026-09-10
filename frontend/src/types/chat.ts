@@ -141,3 +141,34 @@ export interface ThreadSummaryResponse {
   generated_at: string;
   model: string | null;
 }
+
+/** Request body for `POST /review/stream`. */
+export interface ReviewRequestBody {
+  thread_id: string;
+  strategy?: "reexecute" | "resynthesize";
+}
+
+/** A single difference entry produced by the comparator. */
+export interface ReviewDifference {
+  aspect: string;
+  main: string;
+  review: string;
+  severity: "cosmetic" | "minor" | "major";
+}
+
+/** Payload for the `review_comparison` SSE frame. */
+export interface ReviewComparisonPayload {
+  verdict: "consistent" | "partial" | "inconsistent";
+  summary: string;
+  differences: ReviewDifference[];
+}
+
+/** State kept in the store for a running/finished review. */
+export interface ReviewState {
+  visible: boolean;
+  loading: boolean;
+  mainReport: string;
+  reviewReport: string;
+  toolCalls: ToolCall[];
+  comparison: ReviewComparisonPayload | null;
+}

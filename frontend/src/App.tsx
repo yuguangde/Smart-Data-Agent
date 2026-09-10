@@ -32,9 +32,11 @@ import "antd/dist/reset.css";
 
 import { ChatList } from "@/components/ChatList";
 import { ContextUsage } from "@/components/ContextUsage";
+import { ReviewPanel } from "@/components/ReviewPanel";
 import { SenderBox } from "@/components/SenderBox";
 import { Sidebar } from "@/components/Sidebar";
 import { useChatStore } from "@/store/useChatStore";
+import { useReviewStore } from "@/store/useReviewStore";
 
 const { Header, Sider, Content, Footer } = Layout;
 const { Title, Text } = Typography;
@@ -56,6 +58,8 @@ export default function App() {
     removeConversation,
     stop,
   } = useChatStore();
+
+  const review = useReviewStore();
 
   const showWelcome = messages.length === 0 && !pendingHistory;
 
@@ -152,7 +156,12 @@ export default function App() {
                   style={{ background: "transparent" }}
                 />
               ) : (
-                <ChatList messages={messages} loading={loading} />
+                <ChatList
+                  messages={messages}
+                  loading={loading}
+                  threadId={threadId}
+                  onReview={review.runReview}
+                />
               )}
             </Content>
 
@@ -176,6 +185,8 @@ export default function App() {
             </Footer>
           </Layout>
         </Layout>
+
+        <ReviewPanel {...review} onClose={review.closeReview} />
       </Layout>
     </ConfigProvider>
   );

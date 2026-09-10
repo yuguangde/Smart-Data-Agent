@@ -15,6 +15,7 @@ import { Bubble } from "@ant-design/x";
 import { Avatar, Button, Card, Empty, Space, Typography } from "antd";
 import { useEffect, useRef, useState } from "react";
 import type { ChatMessage, ToolCall } from "@/types/chat";
+import { ReviewButton } from "./ReviewButton";
 import {
   ChartIframe,
   ChartMarkdown,
@@ -26,9 +27,11 @@ const { Text } = Typography;
 interface Props {
   messages: ChatMessage[];
   loading: boolean;
+  threadId?: string | null;
+  onReview?: (threadId: string) => void;
 }
 
-export function ChatList({ messages, loading }: Props) {
+export function ChatList({ messages, loading, threadId, onReview }: Props) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   // Auto-scroll to the latest message whenever the list or its content
@@ -81,7 +84,12 @@ export function ChatList({ messages, loading }: Props) {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             ...({ meta: m } as any),
             messageRender: (content: string) => (
-              <MessageBubble content={content} message={m} />
+              <MessageBubble
+                content={content}
+                message={m}
+                threadId={threadId}
+                onReview={onReview}
+              />
             ),
           };
         })}
@@ -96,10 +104,18 @@ export function ChatList({ messages, loading }: Props) {
 function MessageBubble({
   content,
   message,
+  threadId,
+  onReview,
 }: {
   content: string;
   message: ChatMessage;
+  threadId?: string | null;
+  onReview?: (threadId: string) => void;
 }) {
+  const isAssistant = message.role === "assistant" || message.role === "ai";
+  const showReview =
+    isAssistant && !message.streaming && message.content && threadId && onReview;
+
   return (
     <div className="bubble-body">
       <div
@@ -116,6 +132,16 @@ function MessageBubble({
             <ToolCallCard key={tc.id ?? `${tc.name}-${idx}`} tc={tc} />
           ))}
         </Space>
+      ) : null}
+
+      {showReview ? (
+        <div style={{ marginTop: 8 }}>
+          <ReviewButton
+            threadId={threadId}
+            disabled={message.streaming}
+            onReview={onReview}
+          />
+        </div>
       ) : null}
     </div>
   );

@@ -20,6 +20,7 @@ from app.agent.graph import get_compiled_graph
 from app.api import api_router
 from app.config import CheckpointerKind, get_settings
 from app.memory.checkpointer import build_checkpointer, shutdown_checkpointer
+from app.memory.review_store import init_review_store
 from app.memory.summary_store import init_summary_store
 from app.tasks.summarizer import start_summarizer_task
 from app.tools.mcp_loader import init_mcp_tools, shutdown_mcp
@@ -64,6 +65,9 @@ async def lifespan(app: FastAPI):
 
     # Initialize optional summary store for SQLite-backed deployments.
     await init_summary_store()
+
+    # Initialize optional review store for SQLite-backed deployments.
+    await init_review_store()
 
     # Start background task that periodically summarizes stale conversations.
     summarizer_task: asyncio.Task[None] | None = None

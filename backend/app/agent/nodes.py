@@ -179,6 +179,15 @@ def _build_model_with_tools() -> tuple["BaseChatModel", list["BaseTool"]]:
     return chat, tools
 
 
+def build_tool_node(tools: list["BaseTool"] | None = None) -> ToolNode:
+    """Return a ToolNode that executes the given tools with MCP serialization.
+
+    Defaults to the currently registered LLM-visible tools.
+    """
+    tool_list = tools if tools is not None else get_llm_tools()
+    return ToolNode(tool_list, awrap_tool_call=_serializing_awrap_tool_call)
+
+
 def current_tool_signature() -> tuple:
     """Return a hashable signature of the currently available tools.
 
@@ -252,9 +261,7 @@ def make_agent_node():
     chat_final = get_llm()
     # Serialize tool execution to avoid empty outputs caused by parallel MCP
     # invocations under a shared session.
-    raw_tool_node = ToolNode(
-        tools, awrap_tool_call=_serializing_awrap_tool_call
-    )
+    raw_tool_node = build_tool_node(tools)
     marshal_node = make_marshal_node()
     system_prompt = build_system_prompt(tools)
 
@@ -383,4 +390,10 @@ def make_marshal_node():
     return marshal_node
 
 
-__all__ = ["make_agent_node", "current_tool_signature", "make_marshal_node"]
+__all__ = [
+    "make_agent_node",
+    "current_tool_signature",
+    "make_marshal_node",
+    "build_tool_node",
+    "_call_llm",
+]

@@ -118,6 +118,34 @@ class Settings(BaseSettings):
         description="Interval between background conversation summarization tasks.",
     )
 
+    # -------- Review Agent (secondary LLM for cross-checking reports) --------
+    review_enabled: bool = Field(
+        default=False,
+        description="Master switch for the review-agent cross-check feature.",
+    )
+    review_llm_provider: LLMProvider = Field(default=LLMProvider.ANTHROPIC)
+
+    review_openai_api_key: str = Field(default="")
+    review_openai_model: str = Field(default="")
+    review_openai_base_url: str = Field(default="")
+    review_openai_temperature: float = Field(default=0.7)
+
+    review_anthropic_api_key: str = Field(default="")
+    review_anthropic_model: str = Field(default="claude-sonnet-4-5")
+
+    review_deepseek_api_key: str = Field(default="")
+    review_deepseek_base_url: str = Field(default="https://api.deepseek.com")
+    review_deepseek_model: str = Field(default="deepseek-chat")
+
+    review_qwen_api_key: str = Field(default="")
+    review_qwen_base_url: str = Field(
+        default="https://dashscope.aliyuncs.com/compatible-mode/v1"
+    )
+    review_qwen_model: str = Field(default="qwen-plus")
+
+    review_max_tokens: int = Field(default=4096)
+    review_max_iterations: int = Field(default=8)
+
     # -------- Memory --------
     checkpointer: CheckpointerKind = Field(default=CheckpointerKind.MEMORY)
     sqlite_path: str = Field(default=str(BASE_DIR / "data" / "chat.db"))

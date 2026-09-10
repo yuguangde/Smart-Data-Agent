@@ -85,6 +85,47 @@ class MCPServerStatus(BaseModel):
     error: str | None = Field(default=None)
 
 
+class ReviewRequest(BaseModel):
+    """Request body for POST /review and POST /review/stream."""
+
+    thread_id: str = Field(..., description="Primary thread whose final report should be reviewed.")
+    strategy: Literal["reexecute", "resynthesize"] = Field(
+        default="reexecute",
+        description="reexecute = rerun the data query workflow; resynthesize = rewrite the report from existing results.",
+    )
+
+
+class ReviewComparison(BaseModel):
+    """Result of comparing the primary and review reports."""
+
+    verdict: Literal["consistent", "partial", "inconsistent"] = "partial"
+    summary: str = ""
+    differences: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ReviewResponse(BaseModel):
+    """Response body for POST /review."""
+
+    primary_thread_id: str
+    review_thread_id: str
+    user_question: str
+    main_report: str
+    review_report: str
+    comparison: ReviewComparison
+
+
+class ReviewSummary(BaseModel):
+    """Lightweight review record returned by GET /threads/{id}/reviews."""
+
+    review_id: str
+    thread_id: str
+    strategy: str
+    review_model: str
+    verdict: str
+    summary: str
+    created_at: datetime
+
+
 class HealthResponse(BaseModel):
     status: Literal["ok", "degraded"]
     llm_provider: str
@@ -100,5 +141,9 @@ __all__ = [
     "ToolApprovalResume",
     "ThreadCreateResponse",
     "ThreadHistory",
+    "ReviewRequest",
+    "ReviewComparison",
+    "ReviewResponse",
+    "ReviewSummary",
     "HealthResponse",
 ]
