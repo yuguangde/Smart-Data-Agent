@@ -36,17 +36,24 @@ CREATE INDEX IF NOT EXISTS idx_eval_runs_created ON eval_runs(created_at);
 CREATE INDEX IF NOT EXISTS idx_eval_runs_status ON eval_runs(status);
 
 CREATE TABLE IF NOT EXISTS eval_results (
-    result_id  TEXT PRIMARY KEY,
-    run_id     TEXT NOT NULL,
-    case_index INTEGER NOT NULL,
-    question   TEXT NOT NULL,
-    passed     INTEGER NOT NULL DEFAULT 0,
-    scores     TEXT NOT NULL,
-    answer     TEXT,
-    error      TEXT,
-    created_at TEXT NOT NULL
+    result_id     TEXT PRIMARY KEY,
+    run_id        TEXT NOT NULL,
+    case_index    INTEGER NOT NULL,
+    question      TEXT NOT NULL,
+    passed        INTEGER NOT NULL DEFAULT 0,
+    scores        TEXT NOT NULL,
+    answer        TEXT,
+    generated_sql TEXT,
+    gold_sql      TEXT,
+    error         TEXT,
+    created_at    TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_eval_results_run_id ON eval_results(run_id);
+"""
+
+_MIGRATE_RESULTS_SQL = """
+ALTER TABLE eval_results ADD COLUMN generated_sql TEXT;
+ALTER TABLE eval_results ADD COLUMN gold_sql TEXT;
 """
 
 _store: "EvalStore | None" = None
@@ -59,9 +66,18 @@ class EvalStore:
         self._db_path = db_path
 
     async def ensure_schema(self) -> None:
-        """Create evaluation tables if they do not exist."""
+        """Create evaluation tables if they do not exist and migrate old tables."""
         async with aiosqlite.connect(self._db_path) as db:
             await db.executescript(_CREATE_TABLE_SQL)
+            for stmt in _MIGRATE_RESULTS_SQL.strip().split(";\n"):
+                stmt = stmt.strip()
+                if not stmt:
+                    continue
+                try:
+                    await db.execute(stmt)
+                except Exception:
+                    # Column likely already exists.
+                    pass
             await db.commit()
 
     async def create_run(
@@ -148,6 +164,8 @@ class EvalStore:
         passed: bool,
         scores: dict[str, Any],
         answer: str,
+        generated_sql: str | None = None,
+        gold_sql: str | None = None,
         error: str | None = None,
     ) -> None:
         """Persist a single case result."""
@@ -156,8 +174,9 @@ class EvalStore:
         async with aiosqlite.connect(self._db_path) as db:
             await db.execute(
                 "INSERT INTO eval_results "
-                "(result_id, run_id, case_index, question, passed, scores, answer, error, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "(result_id, run_id, case_index, question, passed, scores, answer, "
+                "generated_sql, gold_sql, error, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     result_id,
                     run_id,
@@ -166,6 +185,8 @@ class EvalStore:
                     1 if passed else 0,
                     json.dumps(scores, ensure_ascii=False, default=str),
                     answer,
+                    generated_sql,
+                    gold_sql,
                     error,
                     now,
                 ),
@@ -242,8 +263,9 @@ class EvalStore:
         """Return all case results for a run, ordered by case_index."""
         async with aiosqlite.connect(self._db_path) as db:
             async with db.execute(
-                "SELECT result_id, run_id, case_index, question, passed, scores, answer, error, "
-                "created_at FROM eval_results WHERE run_id = ? ORDER BY case_index",
+                "SELECT result_id, run_id, case_index, question, passed, scores, answer, "
+                "generated_sql, gold_sql, error, created_at FROM eval_results "
+                "WHERE run_id = ? ORDER BY case_index",
                 (run_id,),
             ) as cursor:
                 rows = await cursor.fetchall()
@@ -256,8 +278,10 @@ class EvalStore:
                 "passed": bool(row[4]),
                 "scores": json.loads(row[5] or "{}"),
                 "answer": row[6],
-                "error": row[7],
-                "created_at": row[8],
+                "generated_sql": row[7],
+                "gold_sql": row[8],
+                "error": row[9],
+                "created_at": row[10],
             }
             for row in rows
         ]

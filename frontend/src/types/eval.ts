@@ -41,6 +41,10 @@ export interface EvalCaseResult {
   passed: boolean;
   scores: Record<string, EvalMetricScore>;
   answer: string;
+  /** Generated SQL (present for NL2SQL evaluations such as BIRD-SQL). */
+  generated_sql: string | null;
+  /** Gold / standard SQL answer (present for NL2SQL evaluations). */
+  gold_sql: string | null;
   error: string | null;
   created_at: string;
 }

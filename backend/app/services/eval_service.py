@@ -253,6 +253,8 @@ async def run_eval(
                 passed=case_passed,
                 scores=result["scores"],
                 answer=result.get("generated_sql", result["answer"]),
+                generated_sql=result.get("generated_sql"),
+                gold_sql=result.get("gold_sql"),
                 error=None,
             )
         except Exception as exc:
@@ -266,6 +268,8 @@ async def run_eval(
                 passed=False,
                 scores={},
                 answer="",
+                generated_sql=None,
+                gold_sql=None,
                 error=str(exc),
             )
 

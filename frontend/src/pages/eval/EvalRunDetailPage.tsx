@@ -126,19 +126,57 @@ export default function EvalRunDetailPage() {
                     </Text>
                   </div>
                 ))}
-                <div
-                  className="markdown-body"
-                  style={{ maxHeight: 240, overflow: "auto" }}
-                >
-                  <pre
-                    style={{
-                      whiteSpace: "pre-wrap",
-                      wordBreak: "break-word",
-                    }}
+                {record.gold_sql && (
+                  <div style={{ marginBottom: 8 }}>
+                    <Text strong type="secondary">
+                      标准答案 SQL
+                    </Text>
+                    <pre
+                      style={{
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
+                        background: "#f6ffed",
+                        padding: 8,
+                        borderRadius: 4,
+                      }}
+                    >
+                      {record.gold_sql}
+                    </pre>
+                  </div>
+                )}
+                {record.generated_sql && (
+                  <div style={{ marginBottom: 8 }}>
+                    <Text strong type="secondary">
+                      生成 SQL
+                    </Text>
+                    <pre
+                      style={{
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
+                        background: "#e6f4ff",
+                        padding: 8,
+                        borderRadius: 4,
+                      }}
+                    >
+                      {record.generated_sql}
+                    </pre>
+                  </div>
+                )}
+                {!record.gold_sql && !record.generated_sql && record.answer && (
+                  <div
+                    className="markdown-body"
+                    style={{ maxHeight: 240, overflow: "auto" }}
                   >
-                    {record.answer}
-                  </pre>
-                </div>
+                    <pre
+                      style={{
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
+                      }}
+                    >
+                      {record.answer}
+                    </pre>
+                  </div>
+                )}
               </div>
             ),
           }}

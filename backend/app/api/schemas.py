@@ -178,6 +178,8 @@ class EvalCaseResult(BaseModel):
     passed: bool
     scores: dict[str, EvalMetricScore]
     answer: str
+    generated_sql: str | None = None
+    gold_sql: str | None = None
     error: str | None = None
     created_at: datetime
 

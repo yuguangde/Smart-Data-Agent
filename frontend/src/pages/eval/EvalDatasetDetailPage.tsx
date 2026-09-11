@@ -130,11 +130,29 @@ export default function EvalDatasetDetailPage() {
               render: (tool: string | null) => tool || "—",
             },
             {
+              title: "标准答案 SQL",
+              dataIndex: "expected_args",
+              key: "gold_sql",
+              ellipsis: true,
+              render: (args: Record<string, unknown>) => {
+                const sql = args?.sql as string | undefined;
+                return sql ? (
+                  <code style={{ fontSize: 12 }}>{sql}</code>
+                ) : (
+                  "—"
+                );
+              },
+            },
+            {
               title: "期望关键词",
               dataIndex: "expected_in_answer",
               key: "expected_in_answer",
               render: (keywords: string[]) =>
-                keywords.map((k) => <Tag key={k}>{k}</Tag>),
+                keywords.length > 0 ? (
+                  keywords.map((k) => <Tag key={k}>{k}</Tag>)
+                ) : (
+                  <Text type="secondary">—</Text>
+                ),
             },
             {
               title: "标签",
