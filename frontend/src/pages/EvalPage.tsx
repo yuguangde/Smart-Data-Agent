@@ -27,7 +27,7 @@ export default function EvalPage() {
         </Space>
       </Header>
       <Content style={{ padding: 16 }}>
-        <EvalPanel {...evalStore} onClose={() => {}} />
+        <EvalPanel {...evalStore} visible onClose={() => {}} />
       </Content>
     </Layout>
   );
