@@ -134,6 +134,27 @@ class EvalDataset(BaseModel):
     size_bytes: int
 
 
+class EvalDatasetCase(BaseModel):
+    """A single golden case inside a JSONL evaluation dataset."""
+
+    index: int
+    question: str
+    expected_tool: str | None = None
+    expected_args: dict[str, Any] = Field(default_factory=dict)
+    expected_in_answer: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+
+
+class EvalDatasetDetail(BaseModel):
+    """Detailed view of an evaluation dataset, including all its cases."""
+
+    name: str
+    path: str
+    size_bytes: int
+    total: int
+    cases: list[EvalDatasetCase]
+
+
 class EvalRunRequest(BaseModel):
     """Request body for POST /eval/runs."""
 
@@ -204,6 +225,8 @@ __all__ = [
     "ReviewResponse",
     "ReviewSummary",
     "EvalDataset",
+    "EvalDatasetCase",
+    "EvalDatasetDetail",
     "EvalRunRequest",
     "EvalMetricScore",
     "EvalCaseResult",

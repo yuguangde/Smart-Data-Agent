@@ -10,13 +10,14 @@ from fastapi import APIRouter, HTTPException
 
 from app.api.schemas import (
     EvalDataset,
+    EvalDatasetDetail,
     EvalRunDetail,
     EvalRunRequest,
     EvalRunSummary,
 )
 from app.config import get_settings
 from app.memory.eval_store import get_eval_store
-from app.services.eval_service import resolve_dataset, run_eval
+from app.services.eval_service import load_jsonl, resolve_dataset, run_eval
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,43 @@ async def list_datasets() -> list[EvalDataset]:
     return results
 
 
+@router.get("/eval/datasets/{dataset_name}", response_model=EvalDatasetDetail)
+async def get_dataset(dataset_name: str) -> EvalDatasetDetail:
+    """Return detailed information for a single JSONL dataset."""
+    _check_eval_enabled()
+
+    try:
+        dataset_path = resolve_dataset(dataset_name)
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    try:
+        cases = load_jsonl(dataset_path)
+    except Exception as exc:
+        logger.exception("Failed to load dataset %s: %s", dataset_name, exc)
+        raise HTTPException(
+            status_code=400, detail=f"Failed to load dataset: {exc}"
+        ) from exc
+
+    return EvalDatasetDetail(
+        name=dataset_name,
+        path=str(dataset_path),
+        size_bytes=dataset_path.stat().st_size,
+        total=len(cases),
+        cases=[
+            {
+                "index": idx,
+                "question": case.get("question", ""),
+                "expected_tool": case.get("expected_tool"),
+                "expected_args": case.get("expected_args", {}),
+                "expected_in_answer": case.get("expected_in_answer", []),
+                "tags": case.get("tags", []),
+            }
+            for idx, case in enumerate(cases, start=1)
+        ],
+    )
+
+
 @router.post("/eval/runs", response_model=EvalRunSummary, status_code=202)
 async def start_run(req: EvalRunRequest) -> EvalRunSummary:
     """Start an evaluation run for the requested dataset.
@@ -103,11 +141,14 @@ async def start_run(req: EvalRunRequest) -> EvalRunSummary:
 
 
 @router.get("/eval/runs", response_model=list[EvalRunSummary])
-async def list_runs() -> list[EvalRunSummary]:
-    """Return all evaluation runs, newest first."""
+async def list_runs(dataset: str | None = None) -> list[EvalRunSummary]:
+    """Return evaluation runs, newest first.
+
+    Optionally filter by dataset name via the ``dataset`` query parameter.
+    """
     _check_eval_enabled()
     store = _check_store()
-    rows = await store.list_runs()
+    rows = await store.list_runs(dataset=dataset)
     return [EvalRunSummary(**r) for r in rows]
 
 

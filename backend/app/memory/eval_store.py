@@ -172,15 +172,28 @@ class EvalStore:
             )
             await db.commit()
 
-    async def list_runs(self) -> list[dict[str, Any]]:
-        """Return evaluation runs, newest first."""
+    async def list_runs(self, dataset: str | None = None) -> list[dict[str, Any]]:
+        """Return evaluation runs, newest first.
+
+        Args:
+            dataset: If provided, only return runs for that dataset name.
+        """
         async with aiosqlite.connect(self._db_path) as db:
-            async with db.execute(
-                "SELECT run_id, dataset, dataset_path, status, total, processed, passed, "
-                "errored, metrics, error, created_at, updated_at FROM eval_runs "
-                "ORDER BY created_at DESC"
-            ) as cursor:
-                rows = await cursor.fetchall()
+            if dataset:
+                async with db.execute(
+                    "SELECT run_id, dataset, dataset_path, status, total, processed, passed, "
+                    "errored, metrics, error, created_at, updated_at FROM eval_runs "
+                    "WHERE dataset = ? ORDER BY created_at DESC",
+                    (dataset,),
+                ) as cursor:
+                    rows = await cursor.fetchall()
+            else:
+                async with db.execute(
+                    "SELECT run_id, dataset, dataset_path, status, total, processed, passed, "
+                    "errored, metrics, error, created_at, updated_at FROM eval_runs "
+                    "ORDER BY created_at DESC"
+                ) as cursor:
+                    rows = await cursor.fetchall()
         return [
             {
                 "run_id": row[0],
