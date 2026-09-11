@@ -12,7 +12,6 @@
  */
 import {
   ApiOutlined,
-  ExperimentOutlined,
   GithubOutlined,
   RobotOutlined,
 } from "@ant-design/icons";
@@ -33,12 +32,10 @@ import "antd/dist/reset.css";
 
 import { ChatList } from "@/components/ChatList";
 import { ContextUsage } from "@/components/ContextUsage";
-import { EvalPanel } from "@/components/EvalPanel";
 import { ReviewPanel } from "@/components/ReviewPanel";
 import { SenderBox } from "@/components/SenderBox";
 import { Sidebar } from "@/components/Sidebar";
 import { useChatStore } from "@/store/useChatStore";
-import { useEvalStore } from "@/store/useEvalStore";
 import { useReviewStore } from "@/store/useReviewStore";
 
 const { Header, Sider, Content, Footer } = Layout;
@@ -63,7 +60,6 @@ export default function App() {
   } = useChatStore();
 
   const review = useReviewStore();
-  const evalStore = useEvalStore();
 
   const handleReview = async (targetThreadId: string) => {
     const loaded = await review.loadLatestReview(targetThreadId);
@@ -97,14 +93,6 @@ export default function App() {
           <Space>
             <Tag icon={<ApiOutlined />} color="cyan">
               SSE
-            </Tag>
-            <Tag
-              icon={<ExperimentOutlined />}
-              color="purple"
-              style={{ cursor: "pointer" }}
-              onClick={() => evalStore.openPanel()}
-            >
-              评估
             </Tag>
             <Tooltip title={threadId || "尚未开启会话"} placement="bottom">
               <Text
@@ -206,7 +194,6 @@ export default function App() {
         </Layout>
 
         <ReviewPanel {...review} onClose={review.closeReview} />
-        <EvalPanel {...evalStore} onClose={evalStore.closePanel} />
       </Layout>
     </ConfigProvider>
   );
