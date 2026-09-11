@@ -13,6 +13,10 @@ export interface EvalDatasetCase {
   expected_args: Record<string, unknown>;
   expected_in_answer: string[];
   tags: string[];
+  /** NL2SQL-only: CREATE TABLE schema for the target database. */
+  schema?: string;
+  /** NL2SQL-only: absolute path to the SQLite database. */
+  db_path?: string;
 }
 
 /** Detailed view of an evaluation dataset, including all its cases. */

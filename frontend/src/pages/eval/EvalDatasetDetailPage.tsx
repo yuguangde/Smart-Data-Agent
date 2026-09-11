@@ -109,59 +109,90 @@ export default function EvalDatasetDetailPage() {
           loading={loading}
           dataSource={dataset?.cases || []}
           pagination={{ pageSize: 10 }}
-          columns={[
-            {
-              title: "#",
-              dataIndex: "index",
-              key: "index",
-              width: 50,
-            },
-            {
-              title: "问题",
-              dataIndex: "question",
-              key: "question",
-              ellipsis: true,
-            },
-            {
-              title: "期望工具",
-              dataIndex: "expected_tool",
-              key: "expected_tool",
-              width: 120,
-              render: (tool: string | null) => tool || "—",
-            },
-            {
-              title: "标准答案 SQL",
-              dataIndex: "expected_args",
-              key: "gold_sql",
-              ellipsis: true,
-              render: (args: Record<string, unknown>) => {
-                const sql = args?.sql as string | undefined;
-                return sql ? (
-                  <code style={{ fontSize: 12 }}>{sql}</code>
-                ) : (
-                  "—"
-                );
+          columns={(() => {
+            const isNL2SQL = dataset?.cases.some((c) => c.schema && c.db_path);
+            const hasKeywords = dataset?.cases.some(
+              (c) => c.expected_in_answer && c.expected_in_answer.length > 0,
+            );
+
+            const cols = [
+              {
+                title: "#",
+                dataIndex: "index",
+                key: "index",
+                width: 50,
               },
-            },
-            {
-              title: "期望关键词",
-              dataIndex: "expected_in_answer",
-              key: "expected_in_answer",
-              render: (keywords: string[]) =>
-                keywords.length > 0 ? (
-                  keywords.map((k) => <Tag key={k}>{k}</Tag>)
-                ) : (
-                  <Text type="secondary">—</Text>
-                ),
-            },
-            {
+              {
+                title: "问题",
+                dataIndex: "question",
+                key: "question",
+                ellipsis: true,
+              },
+              {
+                title: "期望工具",
+                dataIndex: "expected_tool",
+                key: "expected_tool",
+                width: 120,
+                render: (tool: string | null) => tool || "—",
+              },
+              {
+                title: "标准答案 SQL",
+                dataIndex: "expected_args",
+                key: "gold_sql",
+                ellipsis: true,
+                render: (args: Record<string, unknown>) => {
+                  const sql = args?.sql as string | undefined;
+                  return sql ? (
+                    <code style={{ fontSize: 12 }}>{sql}</code>
+                  ) : (
+                    "—"
+                  );
+                },
+              },
+            ];
+
+            if (isNL2SQL) {
+              cols.push({
+                title: "数据库",
+                dataIndex: "db_path",
+                key: "db_path",
+                width: 180,
+                ellipsis: true,
+                render: (path: string) => {
+                  const dbId = path.split("/").pop()?.replace(".sqlite", "");
+                  return dbId ? <Tag>{dbId}</Tag> : "—";
+                },
+              } as any);
+            }
+
+            if (hasKeywords) {
+              cols.push({
+                title: "期望关键词",
+                dataIndex: "expected_in_answer",
+                key: "expected_in_answer",
+                render: (keywords: string[]) =>
+                  keywords.length > 0 ? (
+                    keywords.map((k) => <Tag key={k}>{k}</Tag>)
+                  ) : (
+                    <Text type="secondary">—</Text>
+                  ),
+              } as any);
+            }
+
+            cols.push({
               title: "标签",
               dataIndex: "tags",
               key: "tags",
               render: (tags: string[]) =>
-                tags.map((t) => <Tag key={t}>{t}</Tag>),
-            },
-          ]}
+                tags.length > 0 ? (
+                  tags.map((t) => <Tag key={t}>{t}</Tag>)
+                ) : (
+                  <Text type="secondary">—</Text>
+                ),
+            } as any);
+
+            return cols;
+          })()}
         />
       </Card>
 
