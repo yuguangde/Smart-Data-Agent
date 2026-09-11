@@ -9,6 +9,7 @@ import {
   Space,
   Table,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from "antd";
@@ -127,6 +128,11 @@ export default function EvalDatasetDetailPage() {
                 dataIndex: "question",
                 key: "question",
                 ellipsis: true,
+                render: (text: string) => (
+                  <Tooltip title={text} placement="topLeft">
+                    <span>{text}</span>
+                  </Tooltip>
+                ),
               },
               {
                 title: "期望工具",
@@ -142,10 +148,11 @@ export default function EvalDatasetDetailPage() {
                 ellipsis: true,
                 render: (args: Record<string, unknown>) => {
                   const sql = args?.sql as string | undefined;
-                  return sql ? (
-                    <code style={{ fontSize: 12 }}>{sql}</code>
-                  ) : (
-                    "—"
+                  if (!sql) return "—";
+                  return (
+                    <Tooltip title={<pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{sql}</pre>} placement="topLeft">
+                      <code style={{ fontSize: 12 }}>{sql}</code>
+                    </Tooltip>
                   );
                 },
               },

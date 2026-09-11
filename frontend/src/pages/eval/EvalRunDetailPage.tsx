@@ -1,7 +1,18 @@
 /**
  * EvalRunDetailPage — shows a single evaluation run with progress and results.
  */
-import { Alert, Card, Progress, Space, Spin, Statistic, Table, Tag, Typography } from "antd";
+import {
+  Alert,
+  Card,
+  Progress,
+  Space,
+  Spin,
+  Statistic,
+  Table,
+  Tag,
+  Tooltip,
+  Typography,
+} from "antd";
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 
@@ -192,6 +203,11 @@ export default function EvalRunDetailPage() {
               dataIndex: "question",
               key: "question",
               ellipsis: true,
+              render: (text: string) => (
+                <Tooltip title={text} placement="topLeft">
+                  <span>{text}</span>
+                </Tooltip>
+              ),
             },
             {
               title: "结果",
