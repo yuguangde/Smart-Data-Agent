@@ -126,6 +126,64 @@ class ReviewSummary(BaseModel):
     created_at: datetime
 
 
+class EvalDataset(BaseModel):
+    """A JSONL evaluation dataset available on the server."""
+
+    name: str
+    path: str
+    size_bytes: int
+
+
+class EvalRunRequest(BaseModel):
+    """Request body for POST /eval/runs."""
+
+    dataset: str = Field(..., description="Name of the JSONL dataset to evaluate.")
+
+
+class EvalMetricScore(BaseModel):
+    """Per-metric score for a single case."""
+
+    passed: bool
+    reason: str
+
+
+class EvalCaseResult(BaseModel):
+    """A single case result inside an evaluation run."""
+
+    result_id: str
+    run_id: str
+    case_index: int
+    question: str
+    passed: bool
+    scores: dict[str, EvalMetricScore]
+    answer: str
+    error: str | None = None
+    created_at: datetime
+
+
+class EvalRunSummary(BaseModel):
+    """Summary of an evaluation run."""
+
+    run_id: str
+    dataset: str
+    dataset_path: str
+    status: str
+    total: int
+    processed: int
+    passed: int
+    errored: int
+    metrics: dict[str, Any]
+    error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class EvalRunDetail(EvalRunSummary):
+    """Full evaluation run with all case results."""
+
+    results: list[EvalCaseResult]
+
+
 class HealthResponse(BaseModel):
     status: Literal["ok", "degraded"]
     llm_provider: str
@@ -145,5 +203,11 @@ __all__ = [
     "ReviewComparison",
     "ReviewResponse",
     "ReviewSummary",
+    "EvalDataset",
+    "EvalRunRequest",
+    "EvalMetricScore",
+    "EvalCaseResult",
+    "EvalRunSummary",
+    "EvalRunDetail",
     "HealthResponse",
 ]
