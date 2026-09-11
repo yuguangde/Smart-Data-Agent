@@ -1,8 +1,10 @@
 /**
  * EvalRunDetailPage — shows a single evaluation run with progress and results.
  */
+import { CopyOutlined } from "@ant-design/icons";
 import {
   Alert,
+  Button,
   Card,
   Progress,
   Space,
@@ -12,6 +14,7 @@ import {
   Tag,
   Tooltip,
   Typography,
+  message,
 } from "antd";
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
@@ -66,9 +69,31 @@ export default function EvalRunDetailPage() {
       )}
 
       <Card size="small">
-        <Title level={5} style={{ marginTop: 0 }}>
-          {run.dataset}
-        </Title>
+        <Space
+          style={{ width: "100%", justifyContent: "space-between" }}
+          align="center"
+        >
+          <Title level={5} style={{ margin: 0 }}>
+            {run.dataset}
+          </Title>
+          <Space size="small">
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {run.run_id}
+            </Text>
+            <Tooltip title="复制运行 ID">
+              <Button
+                size="small"
+                type="text"
+                icon={<CopyOutlined />}
+                onClick={() => {
+                  void navigator.clipboard.writeText(run.run_id).then(() => {
+                    message.success("运行 ID 已复制");
+                  });
+                }}
+              />
+            </Tooltip>
+          </Space>
+        </Space>
         <Progress
           percent={
             run.total ? Math.round((run.processed / run.total) * 100) : 0
