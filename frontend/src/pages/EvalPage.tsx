@@ -7,7 +7,7 @@
 import { ExperimentOutlined } from "@ant-design/icons";
 import { Layout, Space, Typography } from "antd";
 
-import { EvalPanel } from "@/components/EvalPanel";
+import { EvalManager } from "@/components/EvalManager";
 import { useEvalStore } from "@/store/useEvalStore";
 
 const { Header, Content } = Layout;
@@ -15,6 +15,7 @@ const { Title } = Typography;
 
 export default function EvalPage() {
   const evalStore = useEvalStore();
+  const { visible, openPanel, closePanel, ...managerProps } = evalStore;
 
   return (
     <Layout className="app-root" style={{ minHeight: "100vh" }}>
@@ -27,7 +28,7 @@ export default function EvalPage() {
         </Space>
       </Header>
       <Content style={{ padding: 16 }}>
-        <EvalPanel {...evalStore} visible onClose={() => {}} />
+        <EvalManager {...managerProps} />
       </Content>
     </Layout>
   );
