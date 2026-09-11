@@ -3,6 +3,7 @@
  */
 import type {
   EvalDataset,
+  EvalDatasetDetail,
   EvalRunDetail,
   EvalRunRequest,
   EvalRunSummary,
@@ -27,6 +28,16 @@ export async function fetchEvalDatasets(): Promise<EvalDataset[]> {
   return parseJson<EvalDataset[]>(res);
 }
 
+/** Get detailed information for a single dataset, including its cases. */
+export async function fetchEvalDataset(
+  datasetName: string,
+): Promise<EvalDatasetDetail> {
+  const res = await fetch(
+    `${API_BASE}/eval/datasets/${encodeURIComponent(datasetName)}`,
+  );
+  return parseJson<EvalDatasetDetail>(res);
+}
+
 /** Start an evaluation run for a dataset. */
 export async function startEvalRun(
   body: EvalRunRequest,
@@ -39,9 +50,15 @@ export async function startEvalRun(
   return parseJson<EvalRunSummary>(res);
 }
 
-/** List all evaluation runs. */
-export async function fetchEvalRuns(): Promise<EvalRunSummary[]> {
-  const res = await fetch(`${API_BASE}/eval/runs`);
+/** List evaluation runs, optionally filtered by dataset name. */
+export async function fetchEvalRuns(
+  dataset?: string,
+): Promise<EvalRunSummary[]> {
+  const url = new URL(`${API_BASE}/eval/runs`, window.location.origin);
+  if (dataset) {
+    url.searchParams.set("dataset", dataset);
+  }
+  const res = await fetch(url.toString());
   return parseJson<EvalRunSummary[]>(res);
 }
 

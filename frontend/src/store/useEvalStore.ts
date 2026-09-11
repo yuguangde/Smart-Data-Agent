@@ -1,54 +1,47 @@
 /**
- * useEvalStore — manages the evaluation side panel state.
+ * useEvalStore — small global helper for evaluation state.
+ *
+ * Most evaluation data is fetched directly by the routed page components.
+ * This store keeps lightweight cross-cutting state such as whether any run
+ * is currently active.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 
 import {
   fetchEvalDatasets,
-  fetchEvalRun,
   fetchEvalRuns,
   startEvalRun,
 } from "@/api/eval";
 import type {
   EvalDataset,
-  EvalRunDetail,
   EvalRunSummary,
 } from "@/types/eval";
 
-export interface EvalState {
+export interface EvalStore {
   visible: boolean;
   loading: boolean;
   running: boolean;
   datasets: EvalDataset[];
   runs: EvalRunSummary[];
-  selectedRunId: string | null;
-  runDetail: EvalRunDetail | null;
   error: string | null;
-}
-
-export interface EvalStore extends EvalState {
   openPanel: () => void;
   closePanel: () => void;
   loadDatasets: () => Promise<void>;
   loadRuns: () => Promise<void>;
-  startRun: (dataset: string) => Promise<void>;
-  selectRun: (runId: string) => Promise<void>;
+  startRun: (dataset: string) => Promise<EvalRunSummary>;
 }
 
-const INITIAL_STATE: EvalState = {
+const INITIAL_STATE = {
   visible: false,
   loading: false,
   running: false,
-  datasets: [],
-  runs: [],
-  selectedRunId: null,
-  runDetail: null,
-  error: null,
+  datasets: [] as EvalDataset[],
+  runs: [] as EvalRunSummary[],
+  error: null as string | null,
 };
 
 export function useEvalStore(): EvalStore {
-  const [state, setState] = useState<EvalState>(INITIAL_STATE);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [state, setState] = useState(INITIAL_STATE);
 
   const openPanel = useCallback(() => {
     setState((s) => ({ ...s, visible: true }));
@@ -72,81 +65,25 @@ export function useEvalStore(): EvalStore {
     try {
       const runs = await fetchEvalRuns();
       const running = runs.some((r) => r.status === "running");
-      setState((s) => ({
-        ...s,
-        runs,
-        running: s.running || running,
-      }));
+      setState((s) => ({ ...s, runs, running }));
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       setState((s) => ({ ...s, error: detail }));
     }
   }, []);
 
-  const selectRun = useCallback(async (runId: string) => {
-    setState((s) => ({ ...s, selectedRunId: runId }));
+  const startRun = useCallback(async (dataset: string): Promise<EvalRunSummary> => {
+    setState((s) => ({ ...s, loading: true, error: null }));
     try {
-      const detail = await fetchEvalRun(runId);
-      setState((s) => ({ ...s, runDetail: detail }));
+      const run = await startEvalRun({ dataset });
+      setState((s) => ({ ...s, loading: false, running: true }));
+      return run;
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      setState((s) => ({ ...s, error: detail }));
+      setState((s) => ({ ...s, loading: false, error: detail }));
+      throw err;
     }
   }, []);
-
-  const startRun = useCallback(
-    async (dataset: string) => {
-      setState((s) => ({ ...s, loading: true, error: null }));
-      try {
-        await startEvalRun({ dataset });
-        await loadRuns();
-        setState((s) => ({ ...s, running: true }));
-      } catch (err) {
-        const detail = err instanceof Error ? err.message : String(err);
-        setState((s) => ({ ...s, error: detail }));
-      } finally {
-        setState((s) => ({ ...s, loading: false }));
-      }
-    },
-    [loadRuns],
-  );
-
-  // Initial data load when panel opens.
-  useEffect(() => {
-    if (!state.visible) return;
-    void loadDatasets();
-    void loadRuns();
-    if (state.selectedRunId) {
-      void selectRun(state.selectedRunId);
-    }
-  }, [state.visible]);
-
-  // Poll while any run is active.
-  useEffect(() => {
-    if (!state.running || intervalRef.current) return;
-
-    intervalRef.current = setInterval(() => {
-      void loadRuns();
-      if (state.selectedRunId) {
-        void selectRun(state.selectedRunId);
-      }
-    }, 2000);
-
-    return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
-    };
-  }, [state.running, state.selectedRunId, loadRuns, selectRun]);
-
-  // Stop polling when no runs are running.
-  useEffect(() => {
-    if (!state.running && intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
-    }
-  }, [state.running]);
 
   return {
     ...state,
@@ -155,6 +92,5 @@ export function useEvalStore(): EvalStore {
     loadDatasets,
     loadRuns,
     startRun,
-    selectRun,
   };
 }

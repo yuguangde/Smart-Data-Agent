@@ -5,6 +5,22 @@ export interface EvalDataset {
   size_bytes: number;
 }
 
+/** A single golden case inside a JSONL evaluation dataset. */
+export interface EvalDatasetCase {
+  index: number;
+  question: string;
+  expected_tool: string | null;
+  expected_args: Record<string, unknown>;
+  expected_in_answer: string[];
+  tags: string[];
+}
+
+/** Detailed view of an evaluation dataset, including all its cases. */
+export interface EvalDatasetDetail extends EvalDataset {
+  total: number;
+  cases: EvalDatasetCase[];
+}
+
 /** Request body for starting an evaluation run. */
 export interface EvalRunRequest {
   dataset: string;
