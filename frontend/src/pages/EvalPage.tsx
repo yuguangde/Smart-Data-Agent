@@ -1,10 +1,11 @@
 /**
- * EvalPage — standalone evaluation management page.
+ * EvalPage — standalone evaluation management application.
  *
- * Accessed via the hash route `/#/eval` so the main chat UI stays clean.
+ * Accessed at /eval. This is treated as a separate application from the main
+ * chat UI; there is no navigation back to the chat app here.
  */
-import { LeftOutlined } from "@ant-design/icons";
-import { Button, Layout, Space, Typography } from "antd";
+import { ExperimentOutlined } from "@ant-design/icons";
+import { Layout, Space, Typography } from "antd";
 
 import { EvalPanel } from "@/components/EvalPanel";
 import { useEvalStore } from "@/store/useEvalStore";
@@ -19,23 +20,14 @@ export default function EvalPage() {
     <Layout className="app-root" style={{ minHeight: "100vh" }}>
       <Header className="app-header">
         <Space align="center" size={12}>
-          <Button
-            type="text"
-            icon={<LeftOutlined />}
-            style={{ color: "#fff" }}
-            onClick={() => {
-              window.location.hash = "#";
-            }}
-          >
-            返回主界面
-          </Button>
+          <ExperimentOutlined style={{ fontSize: 22, color: "#fff" }} />
           <Title level={4} style={{ color: "#fff", margin: 0 }}>
             评测管理
           </Title>
         </Space>
       </Header>
       <Content style={{ padding: 16 }}>
-        <EvalPanel {...evalStore} onClose={() => { window.location.hash = "#"; }} />
+        <EvalPanel {...evalStore} onClose={() => {}} />
       </Content>
     </Layout>
   );
