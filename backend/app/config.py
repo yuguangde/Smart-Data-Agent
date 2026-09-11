@@ -146,9 +146,28 @@ class Settings(BaseSettings):
     review_max_tokens: int = Field(default=4096)
     review_max_iterations: int = Field(default=8)
 
+    # -------- Evaluation --------
+    eval_enabled: bool = Field(
+        default=True,
+        description="Master switch for the evaluation API and store.",
+    )
+    eval_datasets_dir: str = Field(
+        default=str(BASE_DIR / "evaluation" / "datasets"),
+        description="Directory containing JSONL evaluation datasets.",
+    )
+
     # -------- Memory --------
     checkpointer: CheckpointerKind = Field(default=CheckpointerKind.MEMORY)
     sqlite_path: str = Field(default=str(BASE_DIR / "data" / "chat.db"))
+
+    @property
+    def eval_datasets_dir_resolved(self) -> Path:
+        """Return the absolute Path of the evaluation datasets directory."""
+        path = Path(self.eval_datasets_dir)
+        if not path.is_absolute():
+            path = BASE_DIR / path
+        return path.resolve()
+
 
     # -------- Behavior --------
     hitl: bool = Field(
