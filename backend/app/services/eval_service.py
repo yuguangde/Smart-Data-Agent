@@ -14,6 +14,7 @@ from typing import Any, Callable
 from app.config import get_settings
 from app.memory.eval_store import EvalStore
 from app.services.agent_service import invoke
+from evaluation.metrics.sql_judges import judge_sql_execution
 from evaluation.metrics.tool_judges import (
     judge_answer_relevance,
     judge_read_file_call,
@@ -61,8 +62,45 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
     return cases
 
 
+def _extract_tool_sql(tool_calls: list[dict[str, Any]]) -> str:
+    """Return SQL from an execute_sql tool call, if present."""
+    for call in tool_calls:
+        name = call.get("name") or ""
+        if name != "execute_sql":
+            continue
+        args = call.get("args") or call.get("input") or {}
+        sql = args.get("sql") or args.get("SQL") or ""
+        if isinstance(sql, str):
+            return sql.strip()
+    return ""
+
+
+def _build_bird_message(case: dict[str, Any]) -> str:
+    """Build a prompt that asks the agent to generate SQL for a BIRD case."""
+    schema = case.get("schema", "")
+    question = case.get("question", "")
+    return (
+        "You are participating in an NL2SQL benchmark evaluation.\n"
+        "Your task is to translate the user's question into a single SQL query.\n"
+        "Use the provided database schema to understand the tables and columns.\n"
+        "You must generate the SQL by calling the execute_sql tool.\n"
+        "Even if the execution environment reports an error, the SQL you provided\n"
+        "will be captured and evaluated, so focus on producing a correct query.\n\n"
+        f"Database schema:\n{schema}\n\n"
+        f"Question: {question}\n\n"
+        "Please generate the SQL by calling the execute_sql tool. "
+        "Do not include explanations, only the SQL."
+    )
+
+
 async def run_case(case: dict[str, Any]) -> dict[str, Any]:
     """Run a single case to completion and score it.
+
+    Supports two evaluation modes:
+    - BIRD-SQL mode: case contains ``schema`` and ``db_path``; the agent is
+      asked to generate SQL, which is executed against a local SQLite DB.
+    - General mode: case contains ``expected_tool`` / ``expected_in_answer``;
+      existing tool/relevance judges are applied.
 
     If the agent pauses for HITL approval, the runner automatically approves
     the pending tool call so that tool-execution correctness can be measured.
@@ -71,8 +109,11 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
     expected_tool = case.get("expected_tool")
     expected_args = case.get("expected_args", {})
     expected_keywords = case.get("expected_in_answer", [])
+    schema = case.get("schema")
+    db_path = case.get("db_path")
 
-    result = await invoke(user_message=question, user_id="eval")
+    user_message = _build_bird_message(case) if schema else question
+    result = await invoke(user_message=user_message, user_id="eval")
 
     # Auto-approve HITL pauses so the runner can observe tool execution.
     max_approvals = 8
@@ -91,6 +132,29 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
 
     scores: dict[str, Any] = {}
 
+    # BIRD-SQL mode: judge by executing generated SQL vs gold SQL.
+    if schema and db_path:
+        generated_sql = _extract_tool_sql(tool_calls)
+        gold_sql = expected_args.get("sql", "") if expected_args else ""
+        if not generated_sql:
+            scores["execution_accuracy"] = {
+                "passed": False,
+                "reason": "Agent did not call execute_sql tool",
+            }
+        else:
+            passed, reason = await judge_sql_execution(gold_sql, generated_sql, db_path)
+            scores["execution_accuracy"] = {"passed": passed, "reason": reason}
+        return {
+            "question": question,
+            "thread_id": result["thread_id"],
+            "answer": answer,
+            "generated_sql": generated_sql,
+            "gold_sql": gold_sql,
+            "tool_calls": tool_calls,
+            "scores": scores,
+        }
+
+    # General mode: existing tool/relevance judges.
     if expected_tool:
         passed, reason = judge_read_file_call(tool_calls, expected_args)
         scores["tool_call"] = {"passed": passed, "reason": reason}
@@ -133,13 +197,22 @@ async def run_eval(
         await store.finalize_run(run_id=run_id, status="failed", error=str(exc))
         return
 
+    # Detect evaluation mode from the first case to pick the right metrics.
+    first_case = cases[0] if cases else {}
+    is_bird = bool(first_case.get("schema") and first_case.get("db_path"))
+
     total = len(cases)
     await store.update_run_progress(
         run_id=run_id,
         processed=0,
         passed=0,
         errored=0,
-        metrics={"accuracy": 0.0, "tool_call_accuracy": None, "relevance_accuracy": None},
+        metrics={
+            "accuracy": 0.0,
+            "tool_call_accuracy": None if not is_bird else 0.0,
+            "relevance_accuracy": None if not is_bird else 0.0,
+            "execution_accuracy": 0.0 if is_bird else None,
+        },
     )
 
     processed = 0
@@ -149,6 +222,8 @@ async def run_eval(
     tool_total = 0
     relevance_passed = 0
     relevance_total = 0
+    execution_passed = 0
+    execution_total = 0
 
     for idx, case in enumerate(cases, start=1):
         try:
@@ -166,6 +241,10 @@ async def run_eval(
                 relevance_total += 1
                 if result["scores"]["relevance"]["passed"]:
                     relevance_passed += 1
+            if "execution_accuracy" in result["scores"]:
+                execution_total += 1
+                if result["scores"]["execution_accuracy"]["passed"]:
+                    execution_passed += 1
 
             await store.save_result(
                 run_id=run_id,
@@ -173,7 +252,7 @@ async def run_eval(
                 question=result["question"],
                 passed=case_passed,
                 scores=result["scores"],
-                answer=result["answer"],
+                answer=result.get("generated_sql", result["answer"]),
                 error=None,
             )
         except Exception as exc:
@@ -195,6 +274,8 @@ async def run_eval(
             metrics["tool_call_accuracy"] = tool_passed / tool_total
         if relevance_total:
             metrics["relevance_accuracy"] = relevance_passed / relevance_total
+        if execution_total:
+            metrics["execution_accuracy"] = execution_passed / execution_total
 
         await store.update_run_progress(
             run_id=run_id,
