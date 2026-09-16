@@ -155,6 +155,14 @@ class Settings(BaseSettings):
         default=str(BASE_DIR / "evaluation" / "datasets"),
         description="Directory containing JSONL evaluation datasets.",
     )
+    eval_retrieval_enabled: bool = Field(
+        default=False,
+        description="Enable semantic-layer retrieval before BIRD-SQL evaluation.",
+    )
+    eval_retrieval_top_k: int = Field(
+        default=3,
+        description="Number of semantic-layer snippets to retrieve for each BIRD case.",
+    )
 
     # -------- Memory --------
     checkpointer: CheckpointerKind = Field(default=CheckpointerKind.MEMORY)

@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 
 KNOWLEDGE_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "knowledge"
 
+# Matches Markdown ATX headers (# to ######) so we can split files into sections.
+_HEADER_PATTERN = re.compile(r"^#{1,6}\s+.+$", re.MULTILINE)
+
 
 def _tokenize(text: str) -> set[str]:
     return {t for t in re.findall(r"[A-Za-z0-9_一-鿿]+", text.lower()) if len(t) > 1}
@@ -27,6 +30,41 @@ def _score(query_tokens: set[str], content: str) -> int:
     return len(query_tokens & content_tokens)
 
 
+def _split_markdown_sections(content: str) -> list[tuple[str, str]]:
+    """Split markdown content into (header, body) sections by headers.
+
+    A plain-text file has a single empty-header section. Markdown files are
+    split on lines beginning with 1-6 ``#`` characters so that retrieval can
+    return the most relevant section rather than the start of the whole file.
+    """
+    if not content.strip():
+        return []
+
+    matches = list(_HEADER_PATTERN.finditer(content))
+    if not matches:
+        return [("", content.strip())]
+
+    sections: list[tuple[str, str]] = []
+    # Treat any text before the first header as an intro section.
+    first_start = matches[0].start()
+    if first_start > 0:
+        intro = content[:first_start].strip()
+        if intro:
+            sections.append(("", intro))
+
+    for i, match in enumerate(matches):
+        header = match.group(0).strip()
+        start = match.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(content)
+        body = content[start:end].strip()
+        sections.append((header, body))
+
+    return sections
+
+
+_MAX_SNIPPET_CHARS = 1200
+
+
 def _query(query: str, top_k: int) -> str:
     if not KNOWLEDGE_DIR.exists():
         return f"No knowledge base directory at {KNOWLEDGE_DIR}."
@@ -36,29 +74,43 @@ def _query(query: str, top_k: int) -> str:
         return f"Knowledge base is empty. Add .md/.txt files under {KNOWLEDGE_DIR}."
 
     query_tokens = _tokenize(query)
-    scored: list[tuple[int, Path, str]] = []
+    # Score each section independently so the most relevant paragraph is returned,
+    # not just the beginning of each file.
+    scored: list[tuple[int, Path, str, str]] = []  # (score, path, header, body)
     for path in files:
         try:
             content = path.read_text(encoding="utf-8", errors="ignore")
         except Exception as exc:
             logger.warning("Failed to read %s: %s", path, exc)
             continue
-        score = _score(query_tokens, content)
-        if score > 0:
-            scored.append((score, path, content))
+        is_markdown = path.suffix.lower() == ".md"
+        sections = _split_markdown_sections(content) if is_markdown else [("", content.strip())]
+        for header, body in sections:
+            section_text = f"{header}\n{body}" if header else body
+            score = _score(query_tokens, section_text)
+            if score > 0:
+                scored.append((score, path, header, body))
 
     if not scored:
         return "No relevant matches in the local knowledge base."
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    top = scored[: max(1, min(top_k, 5))]
 
     blocks = []
-    for score, path, content in top:
-        snippet = content.strip().replace("\n", " ")
-        if len(snippet) > 400:
-            snippet = snippet[:400] + "..."
-        blocks.append(f"File: {path.name} (score={score})\n{snippet}")
+    total_chars = 0
+    # Allow roughly one medium-sized snippet per requested result.
+    budget = max(1, top_k) * _MAX_SNIPPET_CHARS
+    for score, path, header, body in scored:
+        section_text = f"{header}\n{body}" if header else body
+        snippet = section_text.strip()
+        if len(snippet) > _MAX_SNIPPET_CHARS:
+            snippet = snippet[:_MAX_SNIPPET_CHARS] + "..."
+        if total_chars + len(snippet) > budget:
+            break
+        header_tag = f" / {header}" if header else ""
+        blocks.append(f"File: {path.name}{header_tag} (score={score})\n{snippet}")
+        total_chars += len(snippet)
+
     return "\n\n---\n\n".join(blocks)
 
 

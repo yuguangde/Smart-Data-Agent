@@ -14,6 +14,7 @@ from typing import Any, Callable
 from app.config import get_settings
 from app.memory.eval_store import EvalStore
 from app.services.agent_service import invoke
+from app.tools.knowledge_search import _query as _search_knowledge
 from evaluation.metrics.sql_judges import judge_sql_execution
 from evaluation.metrics.tool_judges import (
     judge_answer_relevance,
@@ -75,10 +76,16 @@ def _extract_tool_sql(tool_calls: list[dict[str, Any]]) -> str:
     return ""
 
 
-def _build_bird_message(case: dict[str, Any]) -> str:
+def _build_bird_message(case: dict[str, Any], retrieved_context: str = "") -> str:
     """Build a prompt that asks the agent to generate SQL for a BIRD case."""
     schema = case.get("schema", "")
     question = case.get("question", "")
+    context_section = (
+        "\n\nAdditional semantic guidance (retrieved from knowledge base):\n"
+        f"{retrieved_context}\n"
+        if retrieved_context
+        else ""
+    )
     return (
         "You are participating in an NL2SQL benchmark evaluation.\n"
         "Your task is to translate the user's question into a single SQL query.\n"
@@ -86,7 +93,7 @@ def _build_bird_message(case: dict[str, Any]) -> str:
         "You must generate the SQL by calling the execute_sql tool.\n"
         "Even if the execution environment reports an error, the SQL you provided\n"
         "will be captured and evaluated, so focus on producing a correct query.\n\n"
-        f"Database schema:\n{schema}\n\n"
+        f"Database schema:\n{schema}{context_section}\n\n"
         f"Question: {question}\n\n"
         "Please generate the SQL by calling the execute_sql tool. "
         "Do not include explanations, only the SQL."
@@ -112,7 +119,17 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
     schema = case.get("schema")
     db_path = case.get("db_path")
 
-    user_message = _build_bird_message(case) if schema else question
+    settings = get_settings()
+    retrieved_context = ""
+    if schema and db_path and settings.eval_retrieval_enabled:
+        query = f"{question}\n\n{schema}"
+        retrieved_context = _search_knowledge(query, settings.eval_retrieval_top_k)
+
+    user_message = (
+        _build_bird_message(case, retrieved_context=retrieved_context)
+        if schema
+        else question
+    )
     result = await invoke(user_message=user_message, user_id="eval")
 
     # Auto-approve HITL pauses so the runner can observe tool execution.
