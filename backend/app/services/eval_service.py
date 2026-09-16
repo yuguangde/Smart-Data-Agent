@@ -123,7 +123,15 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
     retrieved_context = ""
     if schema and db_path and settings.eval_retrieval_enabled:
         query = f"{question}\n\n{schema}"
-        retrieved_context = _search_knowledge(query, settings.eval_retrieval_top_k)
+        # Pick the semantic-layer file that matches the current DB so we do not
+        # mix debit_card and student_club guidance.
+        db_name = Path(db_path).stem
+        filename_filter = f"bird-semantic-layer-{db_name}.md"
+        retrieved_context = _search_knowledge(
+            query,
+            settings.eval_retrieval_top_k,
+            filename_filter=filename_filter,
+        )
 
     user_message = (
         _build_bird_message(case, retrieved_context=retrieved_context)

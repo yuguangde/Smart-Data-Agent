@@ -65,11 +65,13 @@ def _split_markdown_sections(content: str) -> list[tuple[str, str]]:
 _MAX_SNIPPET_CHARS = 1200
 
 
-def _query(query: str, top_k: int) -> str:
+def _query(query: str, top_k: int, filename_filter: str | None = None) -> str:
     if not KNOWLEDGE_DIR.exists():
         return f"No knowledge base directory at {KNOWLEDGE_DIR}."
 
     files = [p for p in KNOWLEDGE_DIR.glob("**/*") if p.is_file() and p.suffix.lower() in {".md", ".txt"}]
+    if filename_filter:
+        files = [p for p in files if p.name == filename_filter]
     if not files:
         return f"Knowledge base is empty. Add .md/.txt files under {KNOWLEDGE_DIR}."
 
@@ -115,14 +117,16 @@ def _query(query: str, top_k: int) -> str:
 
 
 @tool
-def knowledge_search(query: str, top_k: int = 3) -> str:
+def knowledge_search(query: str, top_k: int = 3, filename_filter: str = "") -> str:
     """Search the local knowledge base (markdown / text files) for relevant passages.
 
     Args:
         query: natural-language question or keywords.
         top_k: number of top passages to return (1-5).
+        filename_filter: optional exact filename to search within, e.g.
+            "bird-semantic-layer-debit_card.md". Empty means search all files.
     """
-    return _query(query, top_k)
+    return _query(query, top_k, filename_filter=filename_filter or None)
 
 
 __all__ = ["knowledge_search"]
