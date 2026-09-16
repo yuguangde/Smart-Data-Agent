@@ -177,6 +177,19 @@ INNER JOIN products AS T3 ON T1.ProductID = T3.ProductID
 WHERE T2.Country = 'CZE';
 ```
 
+### 模式 5：哪一年/月消费量最高/最低（只返回年份/月份）
+
+```sql
+-- 哪一年 CZK 客户消费量最高？只返回年份，不带 SUM 辅助列
+SELECT SUBSTR(T2.Date, 1, 4)
+FROM customers AS T1
+INNER JOIN yearmonth AS T2 ON T1.CustomerID = T2.CustomerID
+WHERE T1.Currency = 'CZK'
+GROUP BY SUBSTR(T2.Date, 1, 4)
+ORDER BY SUM(T2.Consumption) DESC
+LIMIT 1;
+```
+
 ## 5. 通用规则（debit_card 重点）
 
 ### 5.1 日期处理
