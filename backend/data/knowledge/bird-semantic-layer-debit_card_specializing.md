@@ -1,7 +1,7 @@
 # BIRD mini-dev-50：debit_card_specializing 语义层
 
-> 基于 run `40f512962d0746d8b61be69b39f06658` 中 debit_card 相关 badcase 整理。
-> 本文件只描述 `debit_card_specializing` 数据库的语义层知识。
+> 本文件描述 `debit_card_specializing` 数据库的语义层知识。
+> 内容基于该数据库的 schema、数据分布和常见 SQL 生成陷阱整理。
 
 ## 1. 业务背景
 
@@ -43,8 +43,8 @@ KAM      EUR          71    0.22
 
 **常见失败点：**
 
-- 错误地把 `SME/LAM/KAM` 当成 `Currency` 过滤（case 2、7、8）
-- 问题中提到 `LAM`，99% 是指 `Segment='LAM'`，不是 `Currency`
+- 错误地把 `SME/LAM/KAM` 当成 `Currency` 过滤
+- 问题中提到 `LAM`/`SME`/`KAM`，通常是指 `Segment`，不是 `Currency`
 
 ### `yearmonth` — 客户月度消费汇总（核心事实表）
 
@@ -65,7 +65,7 @@ KAM      EUR          71    0.22
 - 对 `Date` 使用 `strftime('%Y', Date)` 会得到错误结果（如 `-4161`）
 - 正确做法：`SUBSTR(Date, 1, 4)` 取年，`SUBSTR(Date, 5, 2)` 取月
 - `BETWEEN '2013-08' AND '2013-11'` 无效，应使用 `BETWEEN '201308' AND '201311'`
-- "average monthly consumption" 通常指 `AVG(Consumption) / 12`（case 3）
+- "average monthly consumption" 通常指 `AVG(Consumption) / 12`
 
 ### `gasstations` — 加油站网点
 
@@ -78,9 +78,9 @@ KAM      EUR          71    0.22
 
 **常见失败点：**
 
-- `Country` 取值是缩写：`CZE`、`SVK`，不是完整国名（case 18、20）
+- `Country` 取值是缩写：`CZE`、`SVK`，不是完整国名
 - `Segment` 在这里是加油站档次，和客户表的 `Segment` 含义不同
-- 问题问 nationality 时，可能指加油站的 `Country`（case 24）
+- 问题问 nationality 时，可能指加油站的 `Country`
 
 ### `products` — 商品/油品
 
@@ -110,9 +110,9 @@ KAM      EUR          71    0.22
 
 **常见失败点：**
 
-- 把 `transactions_1k.Date` 当成消费月份来统计（case 15、16、18、20）
+- 把 `transactions_1k.Date` 当成消费月份来统计
 - 月度消费统计必须使用 `yearmonth` 表
-- 把 `Price` 当单价使用（case 28、29、30）
+- 把 `Price` 当单价使用
 - 具体问题具体分析：
   - 消费金额/花费相关：`Price`
   - 消费量：`Consumption`（来自 `yearmonth`）
@@ -177,36 +177,9 @@ INNER JOIN products AS T3 ON T1.ProductID = T3.ProductID
 WHERE T2.Country = 'CZE';
 ```
 
-## 5. debit_card badcase 映射
+## 5. 通用规则（debit_card 重点）
 
-| case | 问题 | 失败原因 | 正确语义 |
-|---|---|---|---|
-| 2 | least consumption in LAM | `Currency='LAM'` | `Segment='LAM'` |
-| 3 | average monthly consumption | `AVG(Consumption)` 未除 12 | `AVG(Consumption) / 12` |
-| 5 | which year most consumption | `strftime('%Y', Date)` 错误 | `SUBSTR(Date,1,4)` |
-| 6 | peak month for SME | 返回完整 `Date` | 应 `SUBSTR(Date,5,2)` |
-| 7 | annual avg diff between segments | 用 `Currency` 过滤 CZK 客户 | 应直接按 `Segment` 汇总 |
-| 8 | biggest/lowest percentage increase | 结构复杂但本质是按 Segment 汇总 | 用 `IIF(Segment=... AND Date LIKE '2013%')` |
-| 9 | customer 6 consumption Aug-Nov | `BETWEEN '2013-08' AND '2013-11'` | `BETWEEN '201308' AND '201311'` |
-| 11 | more SMEs pay in CZK than EUR | 返回两组 count | 求差值 `SUM(CZK) - SUM(EUR)` |
-| 14 | highest monthly consumption | `MAX(Consumption)` | 按月份分组后 `ORDER BY SUM DESC LIMIT 1` |
-| 15 | products consumed in Sep 2013 | 用 `transactions_1k.Date` | 应 join `yearmonth` 按 `yearmonth.Date='201309'` |
-| 16 | countries of gas stations Jun 2013 | 用 `transactions_1k.Date` | 应 join `yearmonth` 按 `yearmonth.Date='201306'` |
-| 17 | customers with consumption > 1000 | `COUNT(DISTINCT CustomerID)` 口径 | `COUNT(*)` |
-| 18 | products in Czech Republic | `'Czech Republic'` | `Country='CZE'` |
-| 20 | transactions after 2012/1/1 | `t.Date > '2012-01-01'` | `STRFTIME('%Y', Date) >= '2012'` |
-| 21 | currency paid at specific time | 返回重复行 | 应用 `DISTINCT` |
-| 24 | nationality of customer | 取 `customers.Currency` | 应取 `gasstations.Country` |
-| 25 | percentage of EUR customers | 分母用 distinct customers | 分母用行级 count |
-| 26 | consumption decrease rate | 多列输出 | 单值 `(2012-2013)/2012` |
-| 27 | premium segment percentage in SVK | `Segment='premium'` | `Country='SVK' AND Segment='Premium'` |
-| 28 | amount spent by customer 38508 | `SUM(Amount)` | `SUM(Price)` |
-| 29 | top spending customer | `SUM(Price * Amount)` | `SUM(Price / Amount)` 是单价，金额用 `SUM(Price)` |
-| 30 | consumption status Aug 2012 | 输出多列 | 应取 `yearmonth.Consumption` |
-
-## 6. 通用规则（debit_card 重点）
-
-### 6.1 日期处理
+### 5.1 日期处理
 
 | 表 | 日期字段 | 格式 | 正确处理方式 |
 |---|---|---|---|
@@ -216,14 +189,14 @@ WHERE T2.Country = 'CZE';
 - **monthly consumption 统计必须使用 `yearmonth` 表**，不要用 `transactions_1k.Date`。
 - 对 `yearmonth.Date` 禁用 `strftime`。
 
-### 6.2 聚合口径
+### 5.2 聚合口径
 
 - "average monthly consumption" = `AVG(Consumption) / 12`
 - "how many more A than B" = 单一差值，不是两行
 - "percentage of X customers" = 注意分母是行级计数还是 distinct 计数
 - "top spending customer" 金额用 `SUM(Price)`，不是 `SUM(Amount)` 也不是 `SUM(Price*Amount)`
 
-### 6.3 字段值规范化
+### 5.3 字段值规范化
 
 - 国家代码：`CZE` / `SVK`（不是 `Czech Republic` / `Slovakia`）
 - 客户 Segment：`SME`/`LAM`/`KAM`（大写）

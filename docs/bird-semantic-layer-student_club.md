@@ -1,7 +1,7 @@
 # BIRD mini-dev-50：student_club 语义层
 
-> 基于 run `40f512962d0746d8b61be69b39f06658` 中 student_club 相关 badcase 整理。
-> 本文件只描述 `student_club` 数据库的语义层知识。
+> 本文件描述 `student_club` 数据库的语义层知识。
+> 内容基于该数据库的 schema、数据分布和常见 SQL 生成陷阱整理。
 
 ## 1. 业务背景
 
@@ -93,7 +93,7 @@
 
 **常见失败点：**
 
-- 查询 fundraising 的 notes 时，数据在 `income` 表，不是 `event` 表（case 40）
+- 查询 fundraising 的 notes 时，数据在 `income` 表，不是 `event` 表
 - 收入/支出/预算分属不同表
 
 ### `major` — 专业
@@ -161,19 +161,9 @@ WHERE source = 'Fundraising'
   AND date_received = '2019-09-14';
 ```
 
-## 5. student_club badcase 映射
+## 5. 通用规则（student_club 重点）
 
-| case | 问题 | 失败原因 | 正确语义 |
-|---|---|---|---|
-| 33 | events attended by > 10 members | 返回 `COUNT(*)` | 应返回 `event_name` |
-| 37 | each expense approved? | join 条件错误导致空结果 | event→budget→expense 链 |
-| 39 | total amount spent 2019 vs 2020 | join 方向错误导致 NULL | budget join event 用 `link_to_event` |
-| 40 | notes of fundraising | 查 `event` 表 | 应查 `income` 表的 `notes` |
-| 47 | budget in Advertisement for Yearly Kickoff vs October Meeting | 返回差值 | 应返回比值 `amount_kickoff / amount_october` |
-
-## 6. 通用规则（student_club 重点）
-
-### 6.1 日期处理
+### 5.1 日期处理
 
 | 表 | 日期字段 | 格式 | 正确处理方式 |
 |---|---|---|---|---|
@@ -181,7 +171,7 @@ WHERE source = 'Fundraising'
 | `income` | `date_received` | `YYYY-MM-DD` | 标准日期比较 |
 | `expense` | `expense_date` | `YYYY-MM-DD` | 标准日期比较 |
 
-### 6.2 Join 路径
+### 5.2 Join 路径
 
 1. `budget` 通过 `link_to_event` 关联 `event`
 2. `expense` 通过 `link_to_budget` 关联 `budget`
@@ -189,7 +179,7 @@ WHERE source = 'Fundraising'
 4. `member` 通过 `link_to_major` 关联 `major`
 5. `member` 通过 `zip` 关联 `zip_code`
 
-### 6.3 常见陷阱
+### 5.3 常见陷阱
 
 - **fundraising 相关查询**：`income` 表存 `source='Fundraising'`，不是 `event` 表
 - **事件参与人数**：用 `attendance` 表，按 `link_to_event` 分组计数
