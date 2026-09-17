@@ -160,7 +160,7 @@ class Settings(BaseSettings):
         description="Enable semantic-layer retrieval before BIRD-SQL evaluation.",
     )
     eval_retrieval_top_k: int = Field(
-        default=3,
+        default=5,
         description="Number of semantic-layer snippets to retrieve for each BIRD case.",
     )
 
