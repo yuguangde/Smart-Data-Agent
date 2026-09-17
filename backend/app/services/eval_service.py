@@ -123,7 +123,10 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
     settings = get_settings()
     retrieved_context = ""
     if schema and db_path and settings.eval_retrieval_enabled:
-        query = f"{question}\n\n{schema}"
+        # Use only the natural-language question for semantic retrieval.
+        # The full schema contains many repeated table names and tends to drown
+        # out the field-specific / value-normalization sections we actually need.
+        query = question
         # Pick the semantic-layer file that matches the current DB so we do not
         # mix debit_card and student_club guidance.
         db_name = Path(db_path).stem
