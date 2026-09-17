@@ -6,6 +6,7 @@ import {
   Alert,
   Button,
   Card,
+  Modal,
   Progress,
   Space,
   Spin,
@@ -28,6 +29,7 @@ export default function EvalRunDetailPage() {
   const { runId } = useParams<{ runId: string }>();
   const [run, setRun] = useState<EvalRunDetail | null>(null);
   const [loading, setLoading] = useState(false);
+  const [selected, setSelected] = useState<EvalCaseResult | null>(null);
 
   const load = async () => {
     if (!runId) return;
@@ -245,9 +247,90 @@ export default function EvalRunDetailPage() {
                 </Tag>
               ),
             },
+            {
+              title: "提示词",
+              key: "prompt",
+              width: 100,
+              render: (_: unknown, record: EvalCaseResult) => (
+                <Button size="small" onClick={() => setSelected(record)}>
+                  查看 Prompt
+                </Button>
+              ),
+            },
           ]}
         />
       </Card>
+
+      <Modal
+        title={`Case #${selected?.case_index ?? ""} — 最终提示词与检索上下文`}
+        open={!!selected}
+        onCancel={() => setSelected(null)}
+        footer={null}
+        width={900}
+      >
+        {selected && (
+          <Space direction="vertical" style={{ width: "100%" }}>
+            {selected.thread_id && (
+              <div>
+                <Text strong>Thread ID</Text>
+                <pre
+                  style={{
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    background: "#f5f5f5",
+                    padding: 8,
+                    borderRadius: 4,
+                    maxHeight: 120,
+                    overflow: "auto",
+                  }}
+                >
+                  {selected.thread_id}
+                </pre>
+              </div>
+            )}
+
+            {selected.retrieved_context && (
+              <div>
+                <Text strong>检索到的语义层片段（retrieved_context）</Text>
+                <pre
+                  style={{
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    background: "#fffbe6",
+                    padding: 8,
+                    borderRadius: 4,
+                    maxHeight: 240,
+                    overflow: "auto",
+                  }}
+                >
+                  {selected.retrieved_context}
+                </pre>
+              </div>
+            )}
+
+            {selected.user_message ? (
+              <div>
+                <Text strong>最终 user_message（Agent 实际收到的 prompt）</Text>
+                <pre
+                  style={{
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    background: "#e6f4ff",
+                    padding: 8,
+                    borderRadius: 4,
+                    maxHeight: 480,
+                    overflow: "auto",
+                  }}
+                >
+                  {selected.user_message}
+                </pre>
+              </div>
+            ) : (
+              <Alert message="该 case 没有保存 prompt（可能是旧 run 或未启用评测持久化）" type="info" showIcon />
+            )}
+          </Space>
+        )}
+      </Modal>
     </Space>
   );
 }

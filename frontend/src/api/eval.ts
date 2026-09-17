@@ -2,6 +2,7 @@
  * HTTP client for evaluation APIs.
  */
 import type {
+  EvalCaseResult,
   EvalDataset,
   EvalDatasetDetail,
   EvalRunDetail,
@@ -68,4 +69,12 @@ export async function fetchEvalRun(runId: string): Promise<EvalRunDetail> {
     `${API_BASE}/eval/runs/${encodeURIComponent(runId)}`,
   );
   return parseJson<EvalRunDetail>(res);
+}
+
+/** Get a single case result by id. */
+export async function fetchEvalResult(resultId: string): Promise<EvalCaseResult> {
+  const res = await fetch(
+    `${API_BASE}/eval/results/${encodeURIComponent(resultId)}`,
+  );
+  return parseJson<EvalCaseResult>(res);
 }

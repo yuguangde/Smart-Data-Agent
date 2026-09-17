@@ -164,6 +164,40 @@ class Settings(BaseSettings):
         description="Number of semantic-layer snippets to retrieve for each BIRD case.",
     )
 
+    # -------- Vector Store / Semantic Retrieval --------
+    vector_store_enabled: bool = Field(
+        default=True,
+        description="Enable ChromaDB-backed vector search for knowledge retrieval.",
+    )
+    vector_store_path: str = Field(
+        default=str(BASE_DIR / "data" / "chroma"),
+        description="Directory for ChromaDB persistent storage.",
+    )
+    embedding_model: str = Field(
+        default="sentence-transformers/all-MiniLM-L6-v2",
+        description="Sentence-transformers model name used to encode knowledge snippets.",
+    )
+    embedding_device: str = Field(
+        default="cpu",
+        description="Device passed to sentence-transformers (cpu / cuda / mps).",
+    )
+    embedding_local_cache_dir: str = Field(
+        default=str(BASE_DIR / "data" / "models"),
+        description="Local cache directory for downloaded embedding models.",
+    )
+    knowledge_search_mode: Literal["vector", "token"] = Field(
+        default="vector",
+        description="Retrieval backend for the knowledge_search tool.",
+    )
+    knowledge_max_chars: int = Field(
+        default=4000,
+        description="Total character budget for retrieved knowledge context.",
+    )
+    knowledge_snippet_max_chars: int = Field(
+        default=1500,
+        description="Maximum characters for a single retrieved knowledge snippet.",
+    )
+
     # -------- Memory --------
     checkpointer: CheckpointerKind = Field(default=CheckpointerKind.MEMORY)
     sqlite_path: str = Field(default=str(BASE_DIR / "data" / "chat.db"))
@@ -330,6 +364,33 @@ class Settings(BaseSettings):
             path = BASE_DIR / path
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
+
+    @property
+    def vector_store_path_resolved(self) -> Path:
+        path = Path(self.vector_store_path)
+        if not path.is_absolute():
+            path = BASE_DIR / path
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @property
+    def embedding_cache_dir_resolved(self) -> Path:
+        path = Path(self.embedding_local_cache_dir)
+        if not path.is_absolute():
+            path = BASE_DIR / path
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @field_validator("knowledge_search_mode", mode="before")
+    @classmethod
+    def _validate_knowledge_search_mode(cls, v: str) -> str:
+        allowed = {"vector", "token"}
+        normalized = str(v).strip().lower()
+        if normalized not in allowed:
+            raise ValueError(
+                f"knowledge_search_mode must be one of {sorted(allowed)}, got {v!r}"
+            )
+        return normalized
 
 
 @lru_cache

@@ -73,6 +73,25 @@ async def lifespan(app: FastAPI):
     # Initialize optional evaluation store for SQLite-backed deployments.
     await init_eval_store()
 
+    # Warm the vector-backed semantic index.  Heavy work (embedding + Chroma
+    # writes) is delegated to a worker thread so startup stays responsive.
+    semantic_index = None
+    if settings.vector_store_enabled:
+        # Import lazily here to avoid a circular import at module-load time:
+        # app.agent.graph -> app.tools -> app.services -> app.agent.graph.
+        from app.services.semantic_index import KNOWLEDGE_DIR, get_semantic_index
+        try:
+            semantic_index = get_semantic_index()
+            await asyncio.to_thread(
+                semantic_index.ensure_indexed_knowledge_dir, KNOWLEDGE_DIR
+            )
+            logger.info(
+                "Vector semantic index ready (%s)",
+                settings.embedding_model,
+            )
+        except Exception as exc:
+            logger.warning("Vector semantic index warmup failed: %s", exc)
+
     # Start background task that periodically summarizes stale conversations.
     summarizer_task: asyncio.Task[None] | None = None
     if settings.checkpointer == CheckpointerKind.SQLITE:
@@ -86,6 +105,11 @@ async def lifespan(app: FastAPI):
             try:
                 await summarizer_task
             except asyncio.CancelledError:
+                pass
+        if semantic_index is not None:
+            try:
+                semantic_index.close()
+            except Exception:
                 pass
         await shutdown_mcp()
         await shutdown_checkpointer()

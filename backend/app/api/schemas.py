@@ -180,6 +180,18 @@ class EvalCaseResult(BaseModel):
     answer: str
     generated_sql: str | None = None
     gold_sql: str | None = None
+    user_message: str | None = Field(
+        default=None,
+        description="The final user prompt sent to the agent for this case.",
+    )
+    retrieved_context: str | None = Field(
+        default=None,
+        description="Semantic-layer snippets retrieved before prompt construction.",
+    )
+    thread_id: str | None = Field(
+        default=None,
+        description="Agent thread id, which can be used to replay the full trajectory.",
+    )
     error: str | None = None
     created_at: datetime
 

@@ -26,3 +26,7 @@ jinja2>=3.1.0
 # Dev / Test
 pytest>=8.2.0
 pytest-asyncio>=0.23.0
+
+# Vector store / local embeddings for semantic-layer retrieval
+chromadb>=0.5.0,<1.0.0
+sentence-transformers>=3.0.0,<4.0.0

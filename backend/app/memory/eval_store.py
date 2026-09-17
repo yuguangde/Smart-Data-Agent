@@ -36,17 +36,20 @@ CREATE INDEX IF NOT EXISTS idx_eval_runs_created ON eval_runs(created_at);
 CREATE INDEX IF NOT EXISTS idx_eval_runs_status ON eval_runs(status);
 
 CREATE TABLE IF NOT EXISTS eval_results (
-    result_id     TEXT PRIMARY KEY,
-    run_id        TEXT NOT NULL,
-    case_index    INTEGER NOT NULL,
-    question      TEXT NOT NULL,
-    passed        INTEGER NOT NULL DEFAULT 0,
-    scores        TEXT NOT NULL,
-    answer        TEXT,
-    generated_sql TEXT,
-    gold_sql      TEXT,
-    error         TEXT,
-    created_at    TEXT NOT NULL
+    result_id         TEXT PRIMARY KEY,
+    run_id            TEXT NOT NULL,
+    case_index        INTEGER NOT NULL,
+    question          TEXT NOT NULL,
+    passed            INTEGER NOT NULL DEFAULT 0,
+    scores            TEXT NOT NULL,
+    answer            TEXT,
+    generated_sql     TEXT,
+    gold_sql          TEXT,
+    user_message      TEXT,
+    retrieved_context TEXT,
+    thread_id         TEXT,
+    error             TEXT,
+    created_at        TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_eval_results_run_id ON eval_results(run_id);
 """
@@ -54,6 +57,9 @@ CREATE INDEX IF NOT EXISTS idx_eval_results_run_id ON eval_results(run_id);
 _MIGRATE_RESULTS_SQL = """
 ALTER TABLE eval_results ADD COLUMN generated_sql TEXT;
 ALTER TABLE eval_results ADD COLUMN gold_sql TEXT;
+ALTER TABLE eval_results ADD COLUMN user_message TEXT;
+ALTER TABLE eval_results ADD COLUMN retrieved_context TEXT;
+ALTER TABLE eval_results ADD COLUMN thread_id TEXT;
 """
 
 _store: "EvalStore | None" = None
@@ -166,6 +172,9 @@ class EvalStore:
         answer: str,
         generated_sql: str | None = None,
         gold_sql: str | None = None,
+        user_message: str | None = None,
+        retrieved_context: str | None = None,
+        thread_id: str | None = None,
         error: str | None = None,
     ) -> None:
         """Persist a single case result."""
@@ -175,8 +184,9 @@ class EvalStore:
             await db.execute(
                 "INSERT INTO eval_results "
                 "(result_id, run_id, case_index, question, passed, scores, answer, "
-                "generated_sql, gold_sql, error, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "generated_sql, gold_sql, user_message, retrieved_context, thread_id, "
+                "error, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     result_id,
                     run_id,
@@ -187,6 +197,9 @@ class EvalStore:
                     answer,
                     generated_sql,
                     gold_sql,
+                    user_message,
+                    retrieved_context,
+                    thread_id,
                     error,
                     now,
                 ),
@@ -264,7 +277,8 @@ class EvalStore:
         async with aiosqlite.connect(self._db_path) as db:
             async with db.execute(
                 "SELECT result_id, run_id, case_index, question, passed, scores, answer, "
-                "generated_sql, gold_sql, error, created_at FROM eval_results "
+                "generated_sql, gold_sql, user_message, retrieved_context, thread_id, "
+                "error, created_at FROM eval_results "
                 "WHERE run_id = ? ORDER BY case_index",
                 (run_id,),
             ) as cursor:
@@ -280,8 +294,11 @@ class EvalStore:
                 "answer": row[6],
                 "generated_sql": row[7],
                 "gold_sql": row[8],
-                "error": row[9],
-                "created_at": row[10],
+                "user_message": row[9],
+                "retrieved_context": row[10],
+                "thread_id": row[11],
+                "error": row[12],
+                "created_at": row[13],
             }
             for row in rows
         ]

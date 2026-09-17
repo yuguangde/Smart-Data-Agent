@@ -49,6 +49,12 @@ export interface EvalCaseResult {
   generated_sql: string | null;
   /** Gold / standard SQL answer (present for NL2SQL evaluations). */
   gold_sql: string | null;
+  /** The final user prompt sent to the agent for this case. */
+  user_message: string | null;
+  /** Semantic-layer snippets retrieved before prompt construction. */
+  retrieved_context: string | null;
+  /** Agent thread id, which can be used to replay the full trajectory. */
+  thread_id: string | null;
   error: string | null;
   created_at: string;
 }

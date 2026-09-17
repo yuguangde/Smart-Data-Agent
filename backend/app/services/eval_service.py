@@ -5,6 +5,7 @@ API and persisted in EvalStore.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -127,7 +128,10 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
         # mix debit_card and student_club guidance.
         db_name = Path(db_path).stem
         filename_filter = f"bird-semantic-layer-{db_name}.md"
-        retrieved_context = _search_knowledge(
+        # _search_knowledge may run a local embedding model; run it in a worker
+        # thread so the async event loop stays responsive.
+        retrieved_context = await asyncio.to_thread(
+            _search_knowledge,
             query,
             settings.eval_retrieval_top_k,
             filename_filter=filename_filter,
@@ -175,6 +179,8 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
             "answer": answer,
             "generated_sql": generated_sql,
             "gold_sql": gold_sql,
+            "user_message": user_message,
+            "retrieved_context": retrieved_context,
             "tool_calls": tool_calls,
             "scores": scores,
         }
@@ -192,6 +198,8 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
         "question": question,
         "thread_id": result["thread_id"],
         "answer": answer,
+        "user_message": user_message,
+        "retrieved_context": retrieved_context,
         "tool_calls": tool_calls,
         "scores": scores,
     }
@@ -280,6 +288,9 @@ async def run_eval(
                 answer=result.get("generated_sql", result["answer"]),
                 generated_sql=result.get("generated_sql"),
                 gold_sql=result.get("gold_sql"),
+                user_message=result.get("user_message"),
+                retrieved_context=result.get("retrieved_context"),
+                thread_id=result.get("thread_id"),
                 error=None,
             )
         except Exception as exc:
