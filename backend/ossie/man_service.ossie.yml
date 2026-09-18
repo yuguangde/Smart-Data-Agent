@@ -11,7 +11,7 @@ semantic_model:
     vendor_name: DATAPHIN
   datasets:
   - name: call_detail
-    source: zfcdm_cc.dwd_crm_man_call_detail_di
+    source: dwd.dwd_crm_man_call_detail_di
     fields:
     - name: acw_time
       display_name: 后处理时长
