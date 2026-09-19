@@ -155,6 +155,7 @@ semantic_model:
           - 主键为 (Date, CustomerID)。
           - Date 字段格式为 YYYYMM 文本（例如 201207），日期范围 201112 ~ 201311。
           - 本表用于按月统计客户消费量。
+          - 当问题问“月度消费量最高是多少”或“消费高峰月”时，应先按 SUBSTR(Date, 1, 6) 对 Consumption 求和，再取最大汇总值，不是单条记录的 MAX(Consumption)。
         dimensions:
           - name: CustomerID
             display_name: 客户 ID
@@ -192,7 +193,14 @@ semantic_model:
                   expression: AVG(Consumption) / 12
           - name: max_monthly_consumption
             display_name: 最大月消费量
-            description: 最大月度消费量。
+            description: |
+              月度消费峰值，即按月份汇总后的最大消费量。
+              计算方式：按 SUBSTR(Date, 1, 6) 对 Consumption 求和，再取最大值。
+            ai_context:
+              instructions: |
+                当问题出现“月度消费量最高是多少”或“消费高峰月”时，使用该指标。
+                不要直接使用 MAX(Consumption)（那是单条记录的最大值），
+                而要先按月份（SUBSTR(Date, 1, 6)）汇总，再取最大汇总值。
             expression:
               dialects:
                 - dialect: ANSI_SQL
