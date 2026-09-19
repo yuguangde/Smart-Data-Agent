@@ -174,8 +174,17 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
     settings = get_settings()
     db_name = Path(db_path).stem if db_path else ""
 
+    # If an OSSIE semantic model exists for this DB, use it as the authoritative
+    # semantic layer and skip the legacy markdown retrieval for that DB.
+    ossie_context = _build_ossie_context(db_name) if db_name else ""
+
     retrieved_context = ""
-    if schema and db_path and settings.eval_retrieval_enabled:
+    if (
+        schema
+        and db_path
+        and settings.eval_retrieval_enabled
+        and not ossie_context
+    ):
         # Use only the natural-language question for semantic retrieval.
         # The full schema contains many repeated table names and tends to drown
         # out the field-specific / value-normalization sections we actually need.
@@ -191,8 +200,6 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
             settings.eval_retrieval_top_k,
             filename_filter=filename_filter,
         )
-
-    ossie_context = _build_ossie_context(db_name) if db_name else ""
 
     user_message = (
         _build_bird_message(
