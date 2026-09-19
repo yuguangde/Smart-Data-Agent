@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 from app.config import get_settings
 from app.memory.eval_store import EvalStore
+from app.query.registry import SemanticRegistry
 from app.services.agent_service import invoke
 from app.tools.knowledge_search import _query as _search_knowledge
 from evaluation.metrics.sql_judges import judge_sql_execution
@@ -77,16 +78,66 @@ def _extract_tool_sql(tool_calls: list[dict[str, Any]]) -> str:
     return ""
 
 
-def _build_bird_message(case: dict[str, Any], retrieved_context: str = "") -> str:
+def _build_ossie_context(db_name: str) -> str:
+    """Return a plain-text summary of the OSSIE semantic model for ``db_name``.
+
+    The semantic registry is scanned at server startup, so this lookup is cheap
+    and deterministic.  If no model matches the database name, an empty string is
+    returned and the prompt falls back to the raw schema.
+    """
+    registry = SemanticRegistry.get()
+    model = registry.models.get(db_name)
+    if model is None:
+        return ""
+
+    lines = [f"Semantic model: {model.name}"]
+    if model.description:
+        lines.append(model.description.strip())
+
+    if model.datasets:
+        lines.append("\nAvailable datasets (tables), dimensions and metrics:")
+
+    for ds in model.datasets:
+        lines.append(f"\n- Table: {ds.source}")
+        dim_names = sorted(ds.dimension_names)
+        if dim_names:
+            lines.append(f"  Dimensions: {', '.join(dim_names)}")
+            for dim in ds.dimensions:
+                if dim.description:
+                    lines.append(f"    * {dim.name}: {dim.description.strip()}")
+        metric_names = sorted(ds.metric_names)
+        if metric_names:
+            lines.append(f"  Metrics: {', '.join(metric_names)}")
+            for metric in ds.metrics:
+                if metric.description:
+                    lines.append(f"    * {metric.name}: {metric.description.strip()}")
+
+    return "\n".join(lines)
+
+
+def _build_bird_message(
+    case: dict[str, Any],
+    retrieved_context: str = "",
+    ossie_context: str = "",
+) -> str:
     """Build a prompt that asks the agent to generate SQL for a BIRD case."""
     schema = case.get("schema", "")
     question = case.get("question", "")
-    context_section = (
-        "\n\nAdditional semantic guidance (retrieved from knowledge base):\n"
-        f"{retrieved_context}\n"
-        if retrieved_context
-        else ""
-    )
+    sections: list[str] = []
+    if retrieved_context:
+        sections.append(
+            "Additional semantic guidance (retrieved from knowledge base):\n"
+            f"{retrieved_context}"
+        )
+    if ossie_context:
+        sections.append(
+            "OSSIE semantic model guidance (business definitions and metrics):\n"
+            f"{ossie_context}"
+        )
+    context_section = "\n\n".join(sections)
+    if context_section:
+        context_section = "\n\n" + context_section + "\n"
+
     return (
         "You are participating in an NL2SQL benchmark evaluation.\n"
         "Your task is to translate the user's question into a single SQL query.\n"
@@ -94,7 +145,7 @@ def _build_bird_message(case: dict[str, Any], retrieved_context: str = "") -> st
         "You must generate the SQL by calling the execute_sql tool.\n"
         "Even if the execution environment reports an error, the SQL you provided\n"
         "will be captured and evaluated, so focus on producing a correct query.\n\n"
-        f"Database schema:\n{schema}{context_section}\n\n"
+        f"Database schema:\n{schema}{context_section}\n"
         f"Question: {question}\n\n"
         "Please generate the SQL by calling the execute_sql tool. "
         "Do not include explanations, only the SQL."
@@ -121,6 +172,8 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
     db_path = case.get("db_path")
 
     settings = get_settings()
+    db_name = Path(db_path).stem if db_path else ""
+
     retrieved_context = ""
     if schema and db_path and settings.eval_retrieval_enabled:
         # Use only the natural-language question for semantic retrieval.
@@ -129,7 +182,6 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
         query = question
         # Pick the semantic-layer file that matches the current DB so we do not
         # mix debit_card and student_club guidance.
-        db_name = Path(db_path).stem
         filename_filter = f"bird-semantic-layer-{db_name}.md"
         # _search_knowledge may run a local embedding model; run it in a worker
         # thread so the async event loop stays responsive.
@@ -140,8 +192,14 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
             filename_filter=filename_filter,
         )
 
+    ossie_context = _build_ossie_context(db_name) if db_name else ""
+
     user_message = (
-        _build_bird_message(case, retrieved_context=retrieved_context)
+        _build_bird_message(
+            case,
+            retrieved_context=retrieved_context,
+            ossie_context=ossie_context,
+        )
         if schema
         else question
     )
