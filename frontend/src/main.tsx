@@ -26,7 +26,10 @@ function Root() {
         <Route path="/eval" element={<EvalLayout />}>
           <Route index element={<EvalDatasetListPage />} />
           <Route path="datasets/:datasetName" element={<EvalDatasetDetailPage />} />
-          <Route path="runs/:runId" element={<EvalRunDetailPage />} />
+          <Route
+            path="datasets/:datasetName/runs/:runId"
+            element={<EvalRunDetailPage />}
+          />
         </Route>
       </Routes>
     </AntdApp>

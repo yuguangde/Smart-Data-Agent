@@ -63,7 +63,7 @@ export default function EvalDatasetDetailPage() {
     try {
       const run = await startEvalRun({ dataset: datasetName });
       message.success("评测已开始");
-      navigate(`/eval/runs/${run.run_id}`);
+      navigate(`/eval/datasets/${encodeURIComponent(datasetName)}/runs/${run.run_id}`);
     } catch (err) {
       message.error(err instanceof Error ? err.message : String(err));
     } finally {
@@ -256,7 +256,9 @@ export default function EvalDatasetDetailPage() {
               key: "actions",
               width: 100,
               render: (_, record) => (
-                <Link to={`/eval/runs/${record.run_id}`}>
+                <Link
+                  to={`/eval/datasets/${encodeURIComponent(datasetName || "")}/runs/${record.run_id}`}
+                >
                   <Button size="small">详情</Button>
                 </Link>
               ),
