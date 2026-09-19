@@ -3,8 +3,7 @@ semantic_model:
     display_name: 燃料卡 B2B 语义模型
     description: |
       加油站/燃料卡 B2B 业务语义模型，覆盖客户、加油站网点、商品、客户月度消费汇总
-      以及 4 天抽样交易明细。
-      本模型同时提供表结构、join 关系、业务规则与典型 SQL 模式，可直接用于支撑 NL2SQL 生成。
+      以及抽样交易明细。本模型提供表结构、join 关系与通用业务含义，用于支撑 NL2SQL 生成。
 
     # ---------------- 表关系 / join 路径 ----------------
     relationships:
@@ -24,59 +23,6 @@ semantic_model:
         to: transactions_1k.ProductID
         type: one_to_many
         description: 一个商品可出现在多笔交易中。
-
-    # ---------------- 业务规则 / 易错点 ----------------
-    business_rules:
-      - "月度消费统计必须使用 yearmonth 表，不要对 transactions_1k.Date 做月度聚合（transactions 只有 2012-08-23 ~ 2012-08-26 的 4 天抽样数据）。"
-      - "yearmonth.Date 是 YYYYMM 文本格式。取年：SUBSTR(Date, 1, 4)；取月：SUBSTR(Date, 5, 2)。对该字段禁用 strftime、BETWEEN '2013-08' 等标准日期写法。"
-      - "transactions_1k.Date 是标准日期 YYYY-MM-DD，仅用于交易明细分析。"
-      - "transactions_1k.Price 是交易总价，不是单价；单价 = Price / Amount。"
-      - "average monthly consumption 通常指 AVG(Consumption) / 12。"
-      - " customers.Segment 表示客户规模层级（SME/LAM/KAM）；gasstations.Segment 表示加油站档次（Premium/Discount/Value for money/Other/Noname），含义完全不同。"
-      - "Country 取值为 CZE/SVK，不是 Czech Republic / Slovakia 等完整国名。"
-      - "Currency 取值为 CZK/EUR，分别表示捷克克朗和欧元。"
-      - "top spending customer 的金额口径使用 SUM(Price)，不使用 SUM(Amount)，也不使用 SUM(Price * Amount)。"
-
-    # ---------------- 典型正确 SQL 模式 ----------------
-    sql_patterns:
-      - name: 按客户 Segment 统计某年度消费总量
-        sql: |
-          SELECT T1.Segment, SUM(T2.Consumption) AS total
-          FROM customers AS T1
-          INNER JOIN yearmonth AS T2 ON T1.CustomerID = T2.CustomerID
-          WHERE SUBSTR(T2.Date, 1, 4) = '2013'
-          GROUP BY T1.Segment;
-      - name: 找到某 Segment 在某年度消费最少的客户
-        sql: |
-          SELECT T1.CustomerID
-          FROM customers AS T1
-          INNER JOIN yearmonth AS T2 ON T1.CustomerID = T2.CustomerID
-          WHERE T1.Segment = 'LAM' AND SUBSTR(T2.Date, 1, 4) = '2012'
-          GROUP BY T1.CustomerID
-          ORDER BY SUM(T2.Consumption) ASC
-          LIMIT 1;
-      - name: 某客户群某年度月均消费量
-        sql: |
-          SELECT AVG(T2.Consumption) / 12
-          FROM customers AS T1
-          INNER JOIN yearmonth AS T2 ON T1.CustomerID = T2.CustomerID
-          WHERE SUBSTR(T2.Date, 1, 4) = '2013' AND T1.Segment = 'SME';
-      - name: 按结算货币找消费量最高的年份
-        sql: |
-          SELECT SUBSTR(T2.Date, 1, 4)
-          FROM customers AS T1
-          INNER JOIN yearmonth AS T2 ON T1.CustomerID = T2.CustomerID
-          WHERE T1.Currency = 'CZK'
-          GROUP BY SUBSTR(T2.Date, 1, 4)
-          ORDER BY SUM(T2.Consumption) DESC
-          LIMIT 1;
-      - name: 按国家统计加油站销售的商品种类
-        sql: |
-          SELECT DISTINCT T3.Description
-          FROM transactions_1k AS T1
-          INNER JOIN gasstations AS T2 ON T1.GasStationID = T2.GasStationID
-          INNER JOIN products AS T3 ON T1.ProductID = T3.ProductID
-          WHERE T2.Country = 'CZE';
 
     datasets:
       - name: customers
@@ -100,7 +46,7 @@ semantic_model:
             data_type: string
             description: |
               客户规模层级。SME=中小企业，LAM=大客户，KAM=重点客户。
-              常见问题中会直接用 SME/LAM/KAM 指代客户群体；它属于客户维度，不是 Currency。
+              常见问题中会直接用 SME/LAM/KAM 指代客户群体。
             values:
               - SME
               - LAM
@@ -208,7 +154,7 @@ semantic_model:
         notes:
           - 主键为 (Date, CustomerID)。
           - Date 字段格式为 YYYYMM 文本（例如 201207），日期范围 201112 ~ 201311。
-          - 月度消费统计必须使用本表，不要求助于 transactions_1k.Date。
+          - 本表用于按月统计客户消费量。
         dimensions:
           - name: CustomerID
             display_name: 客户 ID
@@ -220,8 +166,7 @@ semantic_model:
             format: yyyyMM
             is_time: true
             description: |
-              月份，YYYYMM 文本格式。不是标准日期，禁用 strftime。
-              正确做法：SUBSTR(Date, 1, 4) 取年，SUBSTR(Date, 5, 2) 取月。
+              月份，YYYYMM 文本格式。不是标准日期，需要使用 SUBSTR(Date, 1, 4) 取年、SUBSTR(Date, 5, 2) 取月。
           - name: Consumption
             display_name: 当月消费量
             data_type: number
@@ -274,9 +219,8 @@ semantic_model:
           - column: ProductID
             references: products.ProductID
         notes:
-          - 仅包含 2012-08-23 至 2012-08-26 共 1000 条抽样记录。
+          - 仅包含 2012-08-23 至 2012-08-26 的抽样记录。
           - Price 为交易总价（不是单价），金额/花费口径使用 Price。
-          - 不要用它做月度消费统计。
         dimensions:
           - name: TransactionID
             display_name: 交易 ID
