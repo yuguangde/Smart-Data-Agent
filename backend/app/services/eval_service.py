@@ -159,6 +159,13 @@ def _build_ossie_context(db_name: str) -> str:
             for metric in ds.metrics:
                 if metric.description:
                     lines.append(f"    * {metric.name}: {metric.description.strip()}")
+                ai_context = metric.raw.get("ai_context") or {}
+                instructions = ai_context.get("instructions")
+                if instructions:
+                    lines.append(f"      [使用提示] {instructions.strip()}")
+                synonyms = ai_context.get("synonyms") or []
+                if synonyms:
+                    lines.append(f"      [同义词/别名] {', '.join(synonyms)}")
 
     return "\n".join(lines)
 

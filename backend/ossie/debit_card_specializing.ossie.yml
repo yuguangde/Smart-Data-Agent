@@ -184,6 +184,8 @@ semantic_model:
             description: |
               月均消费量 = AVG(Consumption) / 12。
               常用于计算某年度/某客户群的平均每月消费量。
+            ai_context:
+              instructions: 当问题出现“平均月消费量”时，使用该指标。
             expression:
               dialects:
                 - dialect: ANSI_SQL

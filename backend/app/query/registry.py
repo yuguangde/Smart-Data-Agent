@@ -80,6 +80,7 @@ class SemanticMetric:
     filter_: str | None = None
     description: str | None = None
     default_agg: str = "sum"
+    raw: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -252,6 +253,7 @@ class SemanticRegistry:
                     filter_=filter_,
                     description=raw.get("description"),
                     default_agg=raw.get("default_agg", "sum"),
+                    raw=raw,
                 )
             )
         return result
