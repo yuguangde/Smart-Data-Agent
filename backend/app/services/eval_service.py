@@ -65,6 +65,34 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
     return cases
 
 
+def save_jsonl(path: Path, cases: list[dict[str, Any]]) -> None:
+    """Write cases to a JSONL file, renumbering indexes sequentially."""
+    with path.open("w", encoding="utf-8") as f:
+        for idx, case in enumerate(cases, start=1):
+            case["index"] = idx
+            f.write(json.dumps(case, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
+def remove_case(dataset_name: str, case_index: int) -> Path:
+    """Remove a case from a dataset by its 1-based index."""
+    path = resolve_dataset(dataset_name)
+    cases = load_jsonl(path)
+    if case_index < 1 or case_index > len(cases):
+        raise IndexError(f"Case index {case_index} out of range for dataset {dataset_name!r}")
+    cases.pop(case_index - 1)
+    save_jsonl(path, cases)
+    return path
+
+
+def add_case(dataset_name: str, case: dict[str, Any]) -> Path:
+    """Append a new case to a dataset."""
+    path = resolve_dataset(dataset_name)
+    cases = load_jsonl(path)
+    cases.append(case)
+    save_jsonl(path, cases)
+    return path
+
+
 def _extract_tool_sql(tool_calls: list[dict[str, Any]]) -> str:
     """Return SQL from an execute_sql tool call, if present."""
     for call in tool_calls:

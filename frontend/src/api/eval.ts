@@ -78,3 +78,31 @@ export async function fetchEvalResult(resultId: string): Promise<EvalCaseResult>
   );
   return parseJson<EvalCaseResult>(res);
 }
+
+/** Remove a case from a dataset by its 1-based index. */
+export async function deleteEvalCase(
+  datasetName: string,
+  caseIndex: number,
+): Promise<EvalDatasetDetail> {
+  const res = await fetch(
+    `${API_BASE}/eval/datasets/${encodeURIComponent(datasetName)}/cases/${caseIndex}`,
+    { method: "DELETE" },
+  );
+  return parseJson<EvalDatasetDetail>(res);
+}
+
+/** Append a new case to a dataset. */
+export async function addEvalCase(
+  datasetName: string,
+  caseObj: Record<string, unknown>,
+): Promise<EvalDatasetDetail> {
+  const res = await fetch(
+    `${API_BASE}/eval/datasets/${encodeURIComponent(datasetName)}/cases`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ case: caseObj }),
+    },
+  );
+  return parseJson<EvalDatasetDetail>(res);
+}

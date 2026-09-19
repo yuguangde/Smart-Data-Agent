@@ -161,6 +161,16 @@ class EvalRunRequest(BaseModel):
     dataset: str = Field(..., description="Name of the JSONL dataset to evaluate.")
 
 
+class EvalCaseCreateRequest(BaseModel):
+    """Request body for adding a case to a dataset."""
+
+    model_config = ConfigDict(extra="allow")
+
+    case: dict[str, Any] = Field(
+        ..., description="The case object to append to the dataset."
+    )
+
+
 class EvalMetricScore(BaseModel):
     """Per-metric score for a single case."""
 

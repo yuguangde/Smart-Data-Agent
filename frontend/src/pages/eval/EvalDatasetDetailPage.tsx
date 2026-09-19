@@ -1,11 +1,13 @@
 /**
  * EvalDatasetDetailPage — shows dataset metadata, its cases, and runs.
  */
-import { PlayCircleOutlined } from "@ant-design/icons";
+import { DeleteOutlined, PlusOutlined, PlayCircleOutlined } from "@ant-design/icons";
 import {
   Button,
   Card,
   Descriptions,
+  Input,
+  Modal,
   Space,
   Table,
   Tag,
@@ -17,6 +19,8 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import {
+  addEvalCase,
+  deleteEvalCase,
   fetchEvalDataset,
   fetchEvalRuns,
   startEvalRun,
@@ -35,6 +39,9 @@ export default function EvalDatasetDetailPage() {
   const [runs, setRuns] = useState<EvalRunSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [addVisible, setAddVisible] = useState(false);
+  const [addJson, setAddJson] = useState("");
+  const [addLoading, setAddLoading] = useState(false);
 
   const load = async () => {
     if (!datasetName) return;
@@ -71,6 +78,40 @@ export default function EvalDatasetDetailPage() {
     }
   };
 
+  const handleDelete = async (caseIndex: number) => {
+    if (!datasetName) return;
+    try {
+      const updated = await deleteEvalCase(datasetName, caseIndex);
+      setDataset(updated);
+      message.success("已删除 case");
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleAdd = async () => {
+    if (!datasetName) return;
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(addJson);
+    } catch {
+      message.error("JSON 格式错误，请检查输入");
+      return;
+    }
+    setAddLoading(true);
+    try {
+      const updated = await addEvalCase(datasetName, parsed);
+      setDataset(updated);
+      setAddVisible(false);
+      setAddJson("");
+      message.success("已添加 case");
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAddLoading(false);
+    }
+  };
+
   return (
     <Space direction="vertical" style={{ width: "100%" }} size="large">
       <Card size="small">
@@ -81,14 +122,22 @@ export default function EvalDatasetDetailPage() {
           <Title level={5} style={{ margin: 0 }}>
             {datasetName}
           </Title>
-          <Button
-            type="primary"
-            icon={<PlayCircleOutlined />}
-            loading={starting}
-            onClick={handleStart}
-          >
-            运行评测
-          </Button>
+          <Space>
+            <Button
+              icon={<PlusOutlined />}
+              onClick={() => setAddVisible(true)}
+            >
+              添加 case
+            </Button>
+            <Button
+              type="primary"
+              icon={<PlayCircleOutlined />}
+              loading={starting}
+              onClick={handleStart}
+            >
+              运行评测
+            </Button>
+          </Space>
         </Space>
       </Card>
 
@@ -198,6 +247,22 @@ export default function EvalDatasetDetailPage() {
                 ),
             } as any);
 
+            cols.push({
+              title: "操作",
+              key: "actions",
+              width: 80,
+              render: (_: unknown, record: { index: number }) => (
+                <Button
+                  size="small"
+                  danger
+                  icon={<DeleteOutlined />}
+                  onClick={() => handleDelete(record.index)}
+                >
+                  删除
+                </Button>
+              ),
+            } as any);
+
             return cols;
           })()}
         />
@@ -266,6 +331,30 @@ export default function EvalDatasetDetailPage() {
           ]}
         />
       </Card>
+
+      <Modal
+        title="添加 case"
+        open={addVisible}
+        onOk={handleAdd}
+        onCancel={() => {
+          setAddVisible(false);
+          setAddJson("");
+        }}
+        confirmLoading={addLoading}
+        width={700}
+      >
+        <Space direction="vertical" style={{ width: "100%" }}>
+          <Text type="secondary">
+            请输入新 case 的 JSON，字段参考现有 case（question、expected_tool、expected_args 等）。
+          </Text>
+          <Input.TextArea
+            rows={10}
+            value={addJson}
+            onChange={(e) => setAddJson(e.target.value)}
+            placeholder={`{\n  "question": "...",\n  "schema": "...",\n  "db_path": "...",\n  "expected_tool": "execute_sql",\n  "expected_args": {"sql": "..."}\n}`}
+          />
+        </Space>
+      </Modal>
     </Space>
   );
 }

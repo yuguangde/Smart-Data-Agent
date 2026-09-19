@@ -9,6 +9,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 
 from app.api.schemas import (
+    EvalCaseCreateRequest,
     EvalDataset,
     EvalDatasetDetail,
     EvalRunDetail,
@@ -17,7 +18,13 @@ from app.api.schemas import (
 )
 from app.config import get_settings
 from app.memory.eval_store import get_eval_store
-from app.services.eval_service import load_jsonl, resolve_dataset, run_eval
+from app.services.eval_service import (
+    add_case,
+    load_jsonl,
+    remove_case,
+    resolve_dataset,
+    run_eval,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +105,43 @@ async def get_dataset(dataset_name: str) -> EvalDatasetDetail:
             for idx, case in enumerate(cases, start=1)
         ],
     )
+
+
+@router.delete("/eval/datasets/{dataset_name}/cases/{case_index}")
+async def delete_case(dataset_name: str, case_index: int) -> EvalDatasetDetail:
+    """Remove a case from a dataset by its 1-based index."""
+    _check_eval_enabled()
+    try:
+        remove_case(dataset_name, case_index)
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except IndexError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Failed to remove case %d from %s: %s", case_index, dataset_name, exc)
+        raise HTTPException(
+            status_code=500, detail=f"Failed to remove case: {exc}"
+        ) from exc
+
+    # Return the updated dataset detail so the UI can refresh.
+    return await get_dataset(dataset_name)
+
+
+@router.post("/eval/datasets/{dataset_name}/cases", response_model=EvalDatasetDetail)
+async def create_case(
+    dataset_name: str, payload: EvalCaseCreateRequest
+) -> EvalDatasetDetail:
+    """Append a new case to a dataset."""
+    _check_eval_enabled()
+    try:
+        add_case(dataset_name, payload.case)
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Failed to add case to %s: %s", dataset_name, exc)
+        raise HTTPException(status_code=500, detail=f"Failed to add case: {exc}") from exc
+
+    return await get_dataset(dataset_name)
 
 
 @router.post("/eval/runs", response_model=EvalRunSummary, status_code=202)
