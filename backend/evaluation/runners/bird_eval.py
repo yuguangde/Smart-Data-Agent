@@ -27,13 +27,9 @@ from evaluation.metrics.sql_judges import judge_sql_execution
 SYSTEM_PREFIX = """You are participating in an NL2SQL benchmark evaluation.
 Your task is to translate the user's question into a single SQL query.
 
-Use the provided database schema to understand the tables and columns.
 You must generate the SQL by calling the `execute_sql` tool.
 Even if the execution environment reports an error, the SQL you provided will
 be captured and evaluated, so focus on producing a correct SQLite query.
-
-Database schema:
-{schema}
 """
 
 
@@ -73,15 +69,13 @@ def _build_user_message(case: dict[str, Any]) -> str:
 async def run_case(case: dict[str, Any]) -> dict[str, Any]:
     """Run a single BIRD case and score it by execution accuracy."""
     question = case["question"]
-    schema = case.get("schema", "")
     db_path = case.get("db_path", "")
     gold_sql = case.get("expected_args", {}).get("sql", "")
 
-    system_prompt = SYSTEM_PREFIX.format(schema=schema)
     user_message = _build_user_message(case)
 
-    # Combine system prompt and user message so the agent receives schema context.
-    full_message = f"{system_prompt}\n\n{user_message}"
+    # Combine system prompt and user message for the agent.
+    full_message = f"{SYSTEM_PREFIX}\n\n{user_message}"
 
     result = await invoke(user_message=full_message, user_id="bird_eval")
     generated_sql = _extract_generated_sql(result)
