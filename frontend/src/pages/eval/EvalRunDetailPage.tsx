@@ -112,7 +112,11 @@ export default function EvalRunDetailPage() {
         <Space wrap>
           <Statistic title="总数" value={run.total} valueStyle={{ fontSize: 14 }} />
           <Statistic title="通过" value={run.passed} valueStyle={{ fontSize: 14 }} />
-          <Statistic title="失败" value={run.errored} valueStyle={{ fontSize: 14 }} />
+          <Statistic
+            title="失败"
+            value={run.processed - run.passed}
+            valueStyle={{ fontSize: 14 }}
+          />
           <Statistic
             title="准确率"
             value={Math.round((run.metrics.accuracy || 0) * 100)}
