@@ -204,7 +204,6 @@ def _build_bird_message(
     ossie_context: str = "",
 ) -> str:
     """Build a prompt that asks the agent to generate SQL for a BIRD case."""
-    schema = case.get("schema", "")
     question = case.get("question", "")
     sections: list[str] = []
     if retrieved_context:
@@ -224,7 +223,6 @@ def _build_bird_message(
     return (
         "You are participating in an NL2SQL benchmark evaluation.\n"
         "Your task is to translate the user's question into a single SQL query.\n"
-        "Use the provided database schema to understand the tables and columns.\n"
         "You must generate the SQL by calling the execute_sql tool.\n"
         "Even if the execution environment reports an error, the SQL you provided\n"
         "will be captured and evaluated, so focus on producing a correct query.\n"
@@ -244,8 +242,8 @@ def _build_bird_message(
         "  LIMIT 1;\n"
         "Do NOT write:\n"
         "  SELECT c.CustomerID, SUM(y.Consumption) AS total FROM ... "
-        "GROUP BY c.CustomerID ORDER BY total ASC LIMIT 1;\n\n"
-        f"Database schema:\n{schema}{context_section}\n"
+        "GROUP BY c.CustomerID ORDER BY total ASC LIMIT 1;\n"
+        f"{context_section}\n"
         f"Question: {question}\n\n"
         "Please generate the SQL by calling the execute_sql tool. "
         "Do not include explanations, only the SQL."
