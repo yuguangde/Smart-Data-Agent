@@ -22,6 +22,7 @@ httpx>=0.27.0
 # Utils (optional dependencies)
 duckduckgo-search>=6.1.0
 jinja2>=3.1.0
+pymysql>=1.1.0  # StarRocks import / DDL
 
 # Dev / Test
 pytest>=8.2.0
