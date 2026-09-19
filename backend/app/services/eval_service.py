@@ -94,17 +94,65 @@ def _build_ossie_context(db_name: str) -> str:
     if model.description:
         lines.append(model.description.strip())
 
+    # Model-level relationships / join paths.
+    relationships = model.raw.get("relationships") or []
+    if relationships:
+        lines.append("\nJoin relationships:")
+        for rel in relationships:
+            lines.append(
+                f"  - {rel.get('from')} -> {rel.get('to')} "
+                f"({rel.get('type', 'n-to-m')}): {rel.get('description', '')}"
+            )
+
+    # Model-level business rules / caveats.
+    rules = model.raw.get("business_rules") or []
+    if rules:
+        lines.append("\nImportant business rules:")
+        for idx, rule in enumerate(rules, start=1):
+            lines.append(f"  {idx}. {rule}")
+
+    # Example SQL patterns.
+    patterns = model.raw.get("sql_patterns") or []
+    if patterns:
+        lines.append("\nTypical correct SQL patterns:")
+        for pat in patterns:
+            sql = (pat.get("sql") or "").strip()
+            if sql:
+                indented_sql = "\n".join("      " + line for line in sql.splitlines())
+                lines.append(f"  - {pat.get('name', 'Example')}:")
+                lines.append(indented_sql)
+
+    # Per-dataset details.
     if model.datasets:
-        lines.append("\nAvailable datasets (tables), dimensions and metrics:")
+        lines.append("\nDatasets (tables), columns, keys and metrics:")
 
     for ds in model.datasets:
         lines.append(f"\n- Table: {ds.source}")
+        raw = ds.raw or {}
+
+        ds_description = raw.get("description") or ""
+        if ds_description:
+            lines.append(f"  Description:\n    {ds_description.strip()}")
+
+        primary_key = raw.get("primary_key") or []
+        if primary_key:
+            lines.append(f"  Primary key: {', '.join(primary_key)}")
+
+        for fk in raw.get("foreign_keys") or []:
+            lines.append(
+                f"  Foreign key: {fk.get('column')} -> {fk.get('references')}"
+            )
+
+        for note in raw.get("notes") or []:
+            lines.append(f"  Note: {note}")
+
         dim_names = sorted(ds.dimension_names)
         if dim_names:
-            lines.append(f"  Dimensions: {', '.join(dim_names)}")
+            lines.append(f"  Columns: {', '.join(dim_names)}")
             for dim in ds.dimensions:
                 if dim.description:
                     lines.append(f"    * {dim.name}: {dim.description.strip()}")
+
         metric_names = sorted(ds.metric_names)
         if metric_names:
             lines.append(f"  Metrics: {', '.join(metric_names)}")

@@ -102,6 +102,7 @@ class SemanticDataset:
     model_name: str
     dimensions: list[SemanticDimension] = field(default_factory=list)
     metrics: list[SemanticMetric] = field(default_factory=list)
+    raw: dict[str, Any] = field(default_factory=dict)
 
     @property
     def dimension_names(self) -> list[str]:
@@ -119,6 +120,7 @@ class SemanticModel:
     name: str
     description: str | None = None
     datasets: list[SemanticDataset] = field(default_factory=list)
+    raw: dict[str, Any] = field(default_factory=dict)
 
 
 class SemanticRegistry:
@@ -167,6 +169,7 @@ class SemanticRegistry:
             model = SemanticModel(
                 name=model_name,
                 description=raw_model.get("description"),
+                raw=raw_model,
             )
 
             # Metrics and dimensions can live at model level and/or dataset level.
@@ -199,6 +202,7 @@ class SemanticRegistry:
                     model_name=model_name,
                     dimensions=dimensions,
                     metrics=ds_metrics,
+                    raw=raw_ds,
                 )
                 model.datasets.append(dataset)
                 self._datasets[ds_name] = dataset

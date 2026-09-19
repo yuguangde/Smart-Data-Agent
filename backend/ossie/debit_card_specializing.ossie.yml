@@ -4,11 +4,92 @@ semantic_model:
     description: |
       加油站/燃料卡 B2B 业务语义模型，覆盖客户、加油站网点、商品、客户月度消费汇总
       以及 4 天抽样交易明细。
+      本模型同时提供表结构、join 关系、业务规则与典型 SQL 模式，可直接用于支撑 NL2SQL 生成。
+
+    # ---------------- 表关系 / join 路径 ----------------
+    relationships:
+      - from: customers.CustomerID
+        to: yearmonth.CustomerID
+        type: one_to_many
+        description: 一个客户在 yearmonth 中有多个历史月份记录。
+      - from: customers.CustomerID
+        to: transactions_1k.CustomerID
+        type: one_to_many
+        description: 一个客户有多笔抽样交易明细。
+      - from: gasstations.GasStationID
+        to: transactions_1k.GasStationID
+        type: one_to_many
+        description: 一个加油站有多笔交易。
+      - from: products.ProductID
+        to: transactions_1k.ProductID
+        type: one_to_many
+        description: 一个商品可出现在多笔交易中。
+
+    # ---------------- 业务规则 / 易错点 ----------------
+    business_rules:
+      - "月度消费统计必须使用 yearmonth 表，不要对 transactions_1k.Date 做月度聚合（transactions 只有 2012-08-23 ~ 2012-08-26 的 4 天抽样数据）。"
+      - "yearmonth.Date 是 YYYYMM 文本格式。取年：SUBSTR(Date, 1, 4)；取月：SUBSTR(Date, 5, 2)。对该字段禁用 strftime、BETWEEN '2013-08' 等标准日期写法。"
+      - "transactions_1k.Date 是标准日期 YYYY-MM-DD，仅用于交易明细分析。"
+      - "transactions_1k.Price 是交易总价，不是单价；单价 = Price / Amount。"
+      - "average monthly consumption 通常指 AVG(Consumption) / 12。"
+      - " customers.Segment 表示客户规模层级（SME/LAM/KAM）；gasstations.Segment 表示加油站档次（Premium/Discount/Value for money/Other/Noname），含义完全不同。"
+      - "Country 取值为 CZE/SVK，不是 Czech Republic / Slovakia 等完整国名。"
+      - "Currency 取值为 CZK/EUR，分别表示捷克克朗和欧元。"
+      - "top spending customer 的金额口径使用 SUM(Price)，不使用 SUM(Amount)，也不使用 SUM(Price * Amount)。"
+
+    # ---------------- 典型正确 SQL 模式 ----------------
+    sql_patterns:
+      - name: 按客户 Segment 统计某年度消费总量
+        sql: |
+          SELECT T1.Segment, SUM(T2.Consumption) AS total
+          FROM customers AS T1
+          INNER JOIN yearmonth AS T2 ON T1.CustomerID = T2.CustomerID
+          WHERE SUBSTR(T2.Date, 1, 4) = '2013'
+          GROUP BY T1.Segment;
+      - name: 找到某 Segment 在某年度消费最少的客户
+        sql: |
+          SELECT T1.CustomerID
+          FROM customers AS T1
+          INNER JOIN yearmonth AS T2 ON T1.CustomerID = T2.CustomerID
+          WHERE T1.Segment = 'LAM' AND SUBSTR(T2.Date, 1, 4) = '2012'
+          GROUP BY T1.CustomerID
+          ORDER BY SUM(T2.Consumption) ASC
+          LIMIT 1;
+      - name: 某客户群某年度月均消费量
+        sql: |
+          SELECT AVG(T2.Consumption) / 12
+          FROM customers AS T1
+          INNER JOIN yearmonth AS T2 ON T1.CustomerID = T2.CustomerID
+          WHERE SUBSTR(T2.Date, 1, 4) = '2013' AND T1.Segment = 'SME';
+      - name: 按结算货币找消费量最高的年份
+        sql: |
+          SELECT SUBSTR(T2.Date, 1, 4)
+          FROM customers AS T1
+          INNER JOIN yearmonth AS T2 ON T1.CustomerID = T2.CustomerID
+          WHERE T1.Currency = 'CZK'
+          GROUP BY SUBSTR(T2.Date, 1, 4)
+          ORDER BY SUM(T2.Consumption) DESC
+          LIMIT 1;
+      - name: 按国家统计加油站销售的商品种类
+        sql: |
+          SELECT DISTINCT T3.Description
+          FROM transactions_1k AS T1
+          INNER JOIN gasstations AS T2 ON T1.GasStationID = T2.GasStationID
+          INNER JOIN products AS T3 ON T1.ProductID = T3.ProductID
+          WHERE T2.Country = 'CZE';
+
     datasets:
       - name: customers
         source: customers
         display_name: 客户主数据
-        description: 企业客户（燃料卡持卡人）主数据，包括客户细分与结算货币。
+        description: |
+          企业客户（燃料卡持卡人）主数据。
+          DDL: CREATE TABLE customers (CustomerID INTEGER UNIQUE NOT NULL PRIMARY KEY, Segment TEXT, Currency TEXT)
+        primary_key:
+          - CustomerID
+        notes:
+          - CustomerID 为客户唯一标识、主键。
+          - Segment 表示客户规模层级，Currency 表示结算货币。
         dimensions:
           - name: CustomerID
             display_name: 客户 ID
@@ -19,7 +100,7 @@ semantic_model:
             data_type: string
             description: |
               客户规模层级。SME=中小企业，LAM=大客户，KAM=重点客户。
-              常见问题中会直接用 SME/LAM/KAM 指代客户群体。
+              常见问题中会直接用 SME/LAM/KAM 指代客户群体；它属于客户维度，不是 Currency。
             values:
               - SME
               - LAM
@@ -43,7 +124,14 @@ semantic_model:
       - name: gasstations
         source: gasstations
         display_name: 加油站网点
-        description: 加油站网点信息，包括国家、连锁品牌与档次定位。
+        description: |
+          加油站网点信息，包括国家、连锁品牌与档次定位。
+          DDL: CREATE TABLE gasstations (GasStationID INTEGER UNIQUE NOT NULL PRIMARY KEY, ChainID INTEGER, Country TEXT, Segment TEXT)
+        primary_key:
+          - GasStationID
+        notes:
+          - GasStationID 为加油站唯一标识、主键。
+          - 此处的 Segment 表示加油站档次，与客户表 Segment 含义不同。
         dimensions:
           - name: GasStationID
             display_name: 加油站 ID
@@ -80,7 +168,14 @@ semantic_model:
       - name: products
         source: products
         display_name: 商品/油品
-        description: 商品主数据，Description 为本地语言（捷克语、英语等）。
+        description: |
+          商品主数据。
+          DDL: CREATE TABLE products (ProductID INTEGER UNIQUE NOT NULL PRIMARY KEY, Description TEXT)
+        primary_key:
+          - ProductID
+        notes:
+          - ProductID 为商品唯一标识、主键。
+          - Description 为本地语言（捷克语、英语等），例如 Diesel、Natural、AdBlue。
         dimensions:
           - name: ProductID
             display_name: 商品 ID
@@ -102,14 +197,23 @@ semantic_model:
         source: yearmonth
         display_name: 客户月度消费汇总
         description: |
-          核心事实表。按客户 + 月份汇总消费量，Date 字段格式为 YYYYMM 文本
-          （例如 201207），日期范围为 201112 ~ 201311。
-          月度消费统计必须使用本表，不要使用 transactions_1k.Date。
+          核心事实表。按客户 + 月份汇总消费量。
+          DDL: CREATE TABLE yearmonth (CustomerID INTEGER NOT NULL, Date TEXT NOT NULL, Consumption REAL, PRIMARY KEY (Date, CustomerID), FOREIGN KEY (CustomerID) REFERENCES customers(CustomerID))
+        primary_key:
+          - Date
+          - CustomerID
+        foreign_keys:
+          - column: CustomerID
+            references: customers.CustomerID
+        notes:
+          - 主键为 (Date, CustomerID)。
+          - Date 字段格式为 YYYYMM 文本（例如 201207），日期范围 201112 ~ 201311。
+          - 月度消费统计必须使用本表，不要求助于 transactions_1k.Date。
         dimensions:
           - name: CustomerID
             display_name: 客户 ID
             data_type: integer
-            description: 客户 ID，关联 customers.CustomerID。
+            description: 客户 ID，外键关联 customers.CustomerID。
           - name: Date
             display_name: 月份
             data_type: string
@@ -158,8 +262,21 @@ semantic_model:
         source: transactions_1k
         display_name: 交易明细
         description: |
-          抽样交易明细。仅包含 2012-08-23 至 2012-08-26 共 1000 条记录。
-          Price 为总价（不是单价），单价 = Price / Amount。
+          抽样交易明细。
+          DDL: CREATE TABLE transactions_1k (TransactionID INTEGER PRIMARY KEY AUTOINCREMENT, Date DATE, Time TEXT, CustomerID INTEGER, CardID INTEGER, GasStationID INTEGER, ProductID INTEGER, Amount INTEGER, Price REAL)
+        primary_key:
+          - TransactionID
+        foreign_keys:
+          - column: CustomerID
+            references: customers.CustomerID
+          - column: GasStationID
+            references: gasstations.GasStationID
+          - column: ProductID
+            references: products.ProductID
+        notes:
+          - 仅包含 2012-08-23 至 2012-08-26 共 1000 条抽样记录。
+          - Price 为交易总价（不是单价），金额/花费口径使用 Price。
+          - 不要用它做月度消费统计。
         dimensions:
           - name: TransactionID
             display_name: 交易 ID
@@ -177,18 +294,18 @@ semantic_model:
           - name: CustomerID
             display_name: 客户 ID
             data_type: integer
-            description: 客户 ID，关联 customers.CustomerID。
+            description: 客户 ID，外键关联 customers.CustomerID。
           - name: CardID
             display_name: 卡 ID
             data_type: integer
           - name: GasStationID
             display_name: 加油站 ID
             data_type: integer
-            description: 加油站 ID，关联 gasstations.GasStationID。
+            description: 加油站 ID，外键关联 gasstations.GasStationID。
           - name: ProductID
             display_name: 商品 ID
             data_type: integer
-            description: 商品 ID，关联 products.ProductID。
+            description: 商品 ID，外键关联 products.ProductID。
           - name: Amount
             display_name: 数量
             data_type: integer
