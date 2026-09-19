@@ -38,11 +38,12 @@ router = APIRouter(tags=["chat"])
 @router.get("/health", response_model=HealthResponse, summary="Liveness/readiness probe")
 async def health() -> HealthResponse:
     settings = get_settings()
-    mcp_payload = mcp_tools_status() or {}
+    mcp_status = mcp_tools_status() or {}
+    legacy_mcp = mcp_status.get("mcp") or {}
     mcp_block_required = bool(
         settings.mcp_enabled and settings.mcp_url
     )
-    mcp_connected = bool(mcp_payload.get("connected"))
+    mcp_connected = bool(legacy_mcp.get("connected"))
     overall = (
         "degraded"
         if mcp_block_required and not mcp_connected
@@ -58,15 +59,15 @@ async def health() -> HealthResponse:
             configured=bool(settings.mcp_enabled and settings.mcp_url),
             connected=mcp_connected,
             server_name=str(
-                mcp_payload.get("server_name") or settings.mcp_server_name
+                legacy_mcp.get("server_name") or settings.mcp_server_name
             ),
-            url=str(mcp_payload.get("url") or settings.mcp_url),
+            url=str(legacy_mcp.get("url") or settings.mcp_url),
             transport=str(
-                mcp_payload.get("transport") or settings.mcp_transport
+                legacy_mcp.get("transport") or settings.mcp_transport
             ),
-            tool_count=int(mcp_payload.get("tool_count", 0)),
-            tool_names=list(mcp_payload.get("tool_names", [])),
-            error=mcp_payload.get("error"),
+            tool_count=int(legacy_mcp.get("tool_count", 0)),
+            tool_names=list(legacy_mcp.get("tool_names", [])),
+            error=legacy_mcp.get("error"),
         ),
     )
 

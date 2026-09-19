@@ -1,26 +1,27 @@
 """Process-wide cache of MCP-sourced tools.
 
 This module owns the *runtime* state for MCP-backed tools: it lazily
-connects to the configured MCP server (typically a StarRocks MCP instance)
-and exposes the resulting LangChain ``BaseTool`` list to the rest of the
-application.
+connects to configured MCP servers (currently an optional StarRocks MCP
+instance and an optional DoSI MCP instance) and exposes the resulting
+LangChain ``BaseTool`` list to the rest of the application.
 
 ``app.tools.get_all_tools()`` calls :func:`list_tools` here to merge MCP
 tools with the built-in toolset. Initialisation is meant to run during
 FastAPI lifespan startup (see ``app.main.lifespan``) so the first chat
 request does not pay the connect handshake.
 
-Failure modes are deliberately non-fatal: if the MCP server is unreachable
-or returns no tools, we log a warning and return an empty list. The agent
-then keeps working with the built-in toolset alone.
+Failure modes are deliberately non-fatal: if an MCP server is unreachable
+or returns no tools, we log a warning and return an empty list for that
+server. The agent then keeps working with the built-in toolset alone.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass, field
 from typing import Any
 
-from app.config import Settings, get_settings
+from app.config import MCPTransport, Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,37 @@ _WRITE_VERBS = (
     "truncate", "grant", "revoke", "exec_sql", "execute_sql", "kill",
     "rename",
 )
+
+
+@dataclass
+class _ServerConfig:
+    """Connection and filtering configuration for one MCP server."""
+
+    name: str
+    url: str
+    transport: MCPTransport
+    prefix: str
+    allowed_tools: list[str]
+    block_writes: bool
+    max_tools: int
+    auth_token: str
+    connect_timeout_seconds: float
+    call_timeout_seconds: float
+
+
+@dataclass
+class _ServerStatus:
+    """Runtime status for one MCP server."""
+
+    enabled: bool = False
+    configured: bool = False
+    connected: bool = False
+    server_name: str = ""
+    url: str = ""
+    transport: str = ""
+    tool_count: int = 0
+    tool_names: list[str] = field(default_factory=list)
+    error: str | None = None
 
 
 def _looks_writable(name: str) -> bool:
@@ -53,6 +85,52 @@ def _looks_writable(name: str) -> bool:
     return False
 
 
+def _build_server_configs(settings: Settings) -> list[_ServerConfig]:
+    """Return the list of MCP server configurations the loader should use.
+
+    For backwards compatibility, the original StarRocks MCP settings are
+    preserved. An additional DoSI MCP server is added when
+    ``dosi_mcp_enabled`` is true.
+    """
+    configs: list[_ServerConfig] = []
+
+    # Legacy StarRocks MCP configuration.
+    if settings.mcp_enabled and settings.mcp_url:
+        configs.append(
+            _ServerConfig(
+                name=settings.mcp_server_name or "mcp",
+                url=settings.mcp_url,
+                transport=settings.mcp_transport,
+                prefix=settings.mcp_tool_prefix or "",
+                allowed_tools=list(settings.mcp_allowed_tools or []),
+                block_writes=settings.mcp_block_writes,
+                max_tools=settings.mcp_max_tools,
+                auth_token=settings.mcp_auth_token,
+                connect_timeout_seconds=settings.mcp_connect_timeout_seconds,
+                call_timeout_seconds=settings.mcp_call_timeout_seconds,
+            )
+        )
+
+    # DoSI semantic-layer MCP configuration.
+    if settings.dosi_mcp_enabled and settings.dosi_mcp_url:
+        configs.append(
+            _ServerConfig(
+                name=settings.dosi_server_name or "dosi",
+                url=settings.dosi_mcp_url,
+                transport=settings.dosi_mcp_transport,
+                prefix=settings.dosi_tool_prefix or "",
+                allowed_tools=list(settings.dosi_allowed_tools or []),
+                block_writes=False,
+                max_tools=settings.mcp_max_tools,
+                auth_token="",
+                connect_timeout_seconds=settings.mcp_connect_timeout_seconds,
+                call_timeout_seconds=settings.dosi_query_timeout_seconds,
+            )
+        )
+
+    return configs
+
+
 class MCPLoader:
     """Process-wide loader for MCP-backed LangChain tools.
 
@@ -66,25 +144,31 @@ class MCPLoader:
         self._settings = settings or get_settings()
         self._tools: list[Any] = []
         self._lock = asyncio.Lock()
-        self._status: dict[str, Any] = {
-            "enabled": self._settings.mcp_enabled,
-            "configured": bool(self._settings.mcp_url) and self._settings.mcp_enabled,
-            "connected": False,
-            "server_name": self._settings.mcp_server_name,
-            "url": self._settings.mcp_url,
-            "transport": self._settings.mcp_transport.value
-            if hasattr(self._settings.mcp_transport, "value")
-            else str(self._settings.mcp_transport),
-            "tool_count": 0,
-            "tool_names": [],
-            "error": None,
-        }
+        self._statuses: dict[str, _ServerStatus] = {}
+        self._configs = _build_server_configs(self._settings)
+        for cfg in self._configs:
+            self._statuses[cfg.name] = _ServerStatus(
+                enabled=True,
+                configured=bool(cfg.url),
+                server_name=cfg.name,
+                url=cfg.url,
+                transport=(
+                    cfg.transport.value
+                    if hasattr(cfg.transport, "value")
+                    else str(cfg.transport)
+                ),
+            )
+
+    @classmethod
+    def current_configs(cls) -> list[_ServerConfig]:
+        """Return the currently configured MCP server list."""
+        return _build_server_configs(get_settings())
 
     # ------------------------------------------------------------------
     # public API
     # ------------------------------------------------------------------
     async def load(self, *, force: bool = False) -> list[Any]:
-        """Initialise the MCP connection exactly once.
+        """Initialise MCP connections exactly once.
 
         Returns the cached tool list (possibly empty). Subsequent calls
         return immediately unless ``force=True``.
@@ -93,120 +177,143 @@ class MCPLoader:
             if self._tools and not force:
                 return list(self._tools)
 
-            if not self._settings.mcp_enabled:
-                self._status["error"] = "MCP disabled (MCP_ENABLED=false)"
-                logger.info("MCP: disabled by configuration (MCP_ENABLED=false)")
-                return list(self._tools)
+            all_tools: list[Any] = []
+            for cfg in self._configs:
+                server_tools = await self._load_one(cfg)
+                all_tools.extend(server_tools)
 
-            if not self._settings.mcp_url:
-                self._status["error"] = "MCP_URL is empty"
-                logger.info("MCP: no MCP_URL configured, skipping MCP tool load")
-                return list(self._tools)
-
-            try:
-                raw_tools = await self._fetch_tools()
-                tools = self._filter_tools(raw_tools)
-            except asyncio.TimeoutError:
-                msg = (
-                    f"MCP connect/list_tools timed out after "
-                    f"{self._settings.mcp_connect_timeout_seconds}s "
-                    f"(url={self._settings.mcp_url})"
-                )
-                logger.warning(msg)
-                self._status["error"] = msg
-                self._status["connected"] = False
-                return list(self._tools)
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.warning(
-                    "MCP load failed (url=%s): %s", self._settings.mcp_url, exc
-                )
-                self._status["error"] = f"{type(exc).__name__}: {exc}"
-                self._status["connected"] = False
-                return list(self._tools)
-
-        self._apply_prefix(tools)
-        self._tools = list(tools)
-        self._status.update(
-            connected=True,
-            tool_count=len(tools),
-            tool_names=[getattr(t, "name", "?") for t in tools],
-            error=None,
-        )
-        prefix_note = (
-            f" with prefix '{self._settings.mcp_tool_prefix}'"
-            if self._settings.mcp_tool_prefix
-            else ""
-        )
-        logger.info(
-            "MCP loaded %d tool(s)%s from %s (%s)",
-            len(tools),
-            prefix_note,
-            self._settings.mcp_url,
-            self._settings.mcp_transport,
-        )
-        return list(self._tools)
+            self._tools = list(all_tools)
+            return list(self._tools)
 
     def list_tools(self) -> list[Any]:
         """Return a snapshot of currently cached MCP tools (safe across contexts)."""
         return list(self._tools)
 
     def status(self) -> dict[str, Any]:
-        """Return a JSON-serialisable status snapshot suitable for ``/health``."""
-        return dict(self._status)
+        """Return a JSON-serialisable status snapshot suitable for ``/health``.
+
+        Includes a per-server breakdown plus a legacy ``mcp`` entry for
+        backwards compatibility.
+        """
+        by_server = {
+            name: {
+                "enabled": s.enabled,
+                "configured": s.configured,
+                "connected": s.connected,
+                "server_name": s.server_name,
+                "url": s.url,
+                "transport": s.transport,
+                "tool_count": s.tool_count,
+                "tool_names": list(s.tool_names),
+                "error": s.error,
+            }
+            for name, s in self._statuses.items()
+        }
+        # Preserve the existing response shape for callers that expect a flat
+        # mcp status object.
+        legacy = by_server.get(self._settings.mcp_server_name) if self._settings.mcp_enabled else None
+        return {
+            "servers": by_server,
+            "mcp": legacy or {
+                "enabled": self._settings.mcp_enabled,
+                "configured": bool(self._settings.mcp_url),
+                "connected": False,
+                "server_name": self._settings.mcp_server_name,
+                "url": self._settings.mcp_url,
+                "transport": (
+                    self._settings.mcp_transport.value
+                    if hasattr(self._settings.mcp_transport, "value")
+                    else str(self._settings.mcp_transport)
+                ),
+                "tool_count": 0,
+                "tool_names": [],
+                "error": None,
+            },
+        }
 
     async def aclose(self) -> None:
         """Drop cached state and release any held resources."""
         async with self._lock:
             self._tools = []
-            self._status["connected"] = False
-            self._status["tool_count"] = 0
-            self._status["tool_names"] = []
+            for s in self._statuses.values():
+                s.connected = False
+                s.tool_count = 0
+                s.tool_names = []
         logger.debug("MCP loader closed")
 
     # ------------------------------------------------------------------
     # internals
     # ------------------------------------------------------------------
-    async def _fetch_tools(self) -> list[Any]:
+    async def _load_one(self, cfg: _ServerConfig) -> list[Any]:
+        """Fetch and filter tools from a single MCP server."""
+        status = self._statuses[cfg.name]
+        try:
+            raw_tools = await self._fetch_tools(cfg)
+            tools = self._filter_tools(raw_tools, cfg)
+        except asyncio.TimeoutError:
+            msg = (
+                f"MCP connect/list_tools timed out after "
+                f"{cfg.connect_timeout_seconds}s "
+                f"(url={cfg.url})"
+            )
+            logger.warning(msg)
+            status.error = msg
+            status.connected = False
+            return []
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "MCP load failed for %s (url=%s): %s",
+                cfg.name, cfg.url, exc,
+            )
+            status.error = f"{type(exc).__name__}: {exc}"
+            status.connected = False
+            return []
+
+        self._apply_prefix(tools, cfg.prefix)
+        status.connected = True
+        status.tool_count = len(tools)
+        status.tool_names = [getattr(t, "name", "?") for t in tools]
+        status.error = None
+        prefix_note = f" with prefix '{cfg.prefix}'" if cfg.prefix else ""
+        logger.info(
+            "MCP loaded %d tool(s)%s from %s (%s)",
+            len(tools),
+            prefix_note,
+            cfg.name,
+            cfg.url,
+        )
+        return list(tools)
+
+    async def _fetch_tools(self, cfg: _ServerConfig) -> list[Any]:
         """Open an MCP session and return raw tool objects."""
         from langchain_mcp_adapters.client import MultiServerMCPClient
 
-        cfg = self._settings
-        label = cfg.mcp_server_name or "mcp"
         transport = (
-            cfg.mcp_transport.value
-            if hasattr(cfg.mcp_transport, "value")
-            else str(cfg.mcp_transport)
+            cfg.transport.value
+            if hasattr(cfg.transport, "value")
+            else str(cfg.transport)
         )
-
         connection: dict[str, Any] = {
-            "url": cfg.mcp_url,
+            "url": cfg.url,
             "transport": transport,
         }
-        if cfg.mcp_auth_token:
+        if cfg.auth_token:
             connection["headers"] = {
-                "Authorization": f"Bearer {cfg.mcp_auth_token}"
+                "Authorization": f"Bearer {cfg.auth_token}"
             }
 
-        client = MultiServerMCPClient(connections={label: connection})
-
-        # ``client.get_tools()`` is async; wrap in a timeout.
-        timeout = max(cfg.mcp_connect_timeout_seconds, 1.0)
+        client = MultiServerMCPClient(connections={cfg.name: connection})
+        timeout = max(cfg.connect_timeout_seconds, 1.0)
         raw_tools = await asyncio.wait_for(client.get_tools(), timeout=timeout)
         return list(raw_tools)
 
-    def _filter_tools(self, tools: list[Any]) -> list[Any]:
+    def _filter_tools(self, tools: list[Any], cfg: _ServerConfig) -> list[Any]:
         """Apply whitelist + max-tool cap + write-block heuristic."""
-        cfg = self._settings
+        allowed = [name.strip().lower() for name in cfg.allowed_tools if name and name.strip()]
 
-        allowed = [
-            name.strip().lower()
-            for name in (cfg.mcp_allowed_tools or [])
-            if name and name.strip()
-        ]
-
-        # Empty list or ['*'] -> no whitelist, optional write-block.
-        if not allowed or allowed == ["*"]:
-            if cfg.mcp_block_writes:
+        # Empty list -> no whitelist; optional write-block.
+        if not allowed:
+            if cfg.block_writes:
                 kept, dropped = [], []
                 for tool in tools:
                     (dropped if _looks_writable(getattr(tool, "name", "")) else kept).append(tool)
@@ -216,7 +323,7 @@ class MCPLoader:
                         [getattr(t, "name", "?") for t in dropped],
                     )
                 tools = kept
-            return list(tools)[: cfg.mcp_max_tools]
+            return list(tools)[: cfg.max_tools]
 
         # Explicit whitelist.
         allowed_set = set(allowed)
@@ -230,12 +337,14 @@ class MCPLoader:
                 if name:
                     dropped.append(name)
         if dropped:
-            logger.info("MCP: %d tool(s) filtered by whitelist: %s", len(dropped), dropped)
-        return kept[: cfg.mcp_max_tools]
+            logger.info(
+                "MCP: %d tool(s) filtered by whitelist for %s: %s",
+                len(dropped), cfg.name, dropped,
+            )
+        return kept[: cfg.max_tools]
 
-    def _apply_prefix(self, tools: list[Any]) -> None:
+    def _apply_prefix(self, tools: list[Any], prefix: str) -> None:
         """Mutates ``BaseTool.name`` in place to add the configured prefix."""
-        prefix = self._settings.mcp_tool_prefix
         if not prefix:
             return
         for tool in tools:
@@ -276,7 +385,7 @@ def mcp_tools_status() -> dict[str, Any]:
 
 
 async def shutdown_mcp() -> None:
-    """Drop cached MCP state. Called from FastAPI shutdown."""
+    """Drop cached state. Called from FastAPI shutdown."""
     if _loader is not None:
         await _loader.aclose()
 

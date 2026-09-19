@@ -293,6 +293,73 @@ class Settings(BaseSettings):
         ),
     )
 
+    # -------- DoSI (Dosi) semantic-layer SQL engine --------
+    # DoSI compiles Apache Ossie YAML into warehouse-specific SQL and exposes
+    # the capability through an MCP server. When enabled, the agent will prefer
+    # DoSI tools for metric-style questions and fall back to execute_sql when
+    # DoSI cannot compile the request.
+    dosi_mcp_enabled: bool = Field(
+        default=False,
+        description="Master switch for the DoSI MCP-backed semantic SQL engine.",
+    )
+    dosi_mcp_url: str = Field(
+        default="",
+        description="Base URL of the DoSI MCP server (streamable_http / sse transport).",
+    )
+    dosi_mcp_transport: MCPTransport = Field(
+        default=MCPTransport.STREAMABLE_HTTP,
+        description="Transport protocol used by DoSI MCP server.",
+    )
+    dosi_server_name: str = Field(
+        default="dosi",
+        description="Logical server label for the DoSI MCP server.",
+    )
+    dosi_tool_prefix: str = Field(
+        default="dosi_",
+        description=(
+            "Prefix prepended to DoSI MCP tool names. "
+            "Set to '' (empty) to disable prefixing."
+        ),
+    )
+    dosi_allowed_tools: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Whitelist of DoSI MCP tool names to expose. "
+            "Empty means expose all DoSI tools."
+        ),
+    )
+    dosi_model_path: str = Field(
+        default=str(BASE_DIR / "data" / "dosi-model.yaml"),
+        description=(
+            "Path to the combined Apache Ossie model file used by DoSI. "
+            "Generated automatically from backend/ossie/*.ossie.yml at startup."
+        ),
+    )
+    dosi_start_server: bool = Field(
+        default=True,
+        description=(
+            "When true and dosi_mcp_enabled is true, the backend will try to "
+            "start a local dosi-server subprocess on startup. "
+            "Set to false if you run dosi-server outside the backend process."
+        ),
+    )
+    dosi_server_listen_host: str = Field(
+        default="127.0.0.1",
+        description="Host for the embedded DoSI server to listen on.",
+    )
+    dosi_server_listen_port: int = Field(
+        default=8080,
+        description="Port for the embedded DoSI server to listen on.",
+    )
+    dosi_server_bin: str = Field(
+        default="dosi-server",
+        description="Path or name of the dosi-server executable.",
+    )
+    dosi_query_timeout_seconds: float = Field(
+        default=60.0,
+        description="Timeout for DoSI MCP tool calls.",
+    )
+
     # -------- LangSmith --------
     langsmith_tracing: bool = Field(default=False)
     langsmith_api_key: str = Field(default="")

@@ -63,9 +63,16 @@ _BASE_SYSTEM_PROMPT = """你是 Smart Data Agent —— 一个精准、可靠的
 
 - **指标统计、趋势分析、按维度聚合**类问题：
   1. 先调用 `get_semantic_context` 获取语义层中的数据集、指标和维度白名单；
-  2. 根据语义层信息构造合法的 MetricQuery DSL JSON，调用 `execute_metric_dsl`；
-  3. 拿到结果后，用 Markdown 表格或列表展示关键数据，并给出分析结论。
-  4. 如果语义层中同时存在预聚合表（如 `yearmonth`）和明细表（如 `transactions_1k`），
+  2. 如果可用工具列表中包含名称以 `dosi_` 开头的 DoSI MCP 工具，**优先使用 DoSI**：
+     - 调用 DoSI 的 metrics/dimensions 相关工具查看可用指标和维度；
+     - 调用 DoSI 的 query/compile 工具，传入指标名、分组维度、过滤条件、时间粒度等参数；
+     - DoSI 会基于 OSSIE 语义模型生成并执行 SQL，返回结果。
+     - **如果 DoSI 工具调用报错**（如查询无法编译、维度不存在、连接失败），
+       立即放弃 DoSI，回退到 `execute_metric_dsl` 或 `execute_sql`。
+  3. 如果没有 DoSI 工具或 DoSI 已报错，根据语义层信息构造合法的 MetricQuery DSL JSON，
+     调用 `execute_metric_dsl`；
+  4. 拿到结果后，用 Markdown 表格或列表展示关键数据，并给出分析结论。
+  5. 如果语义层中同时存在预聚合表（如 `yearmonth`）和明细表（如 `transactions_1k`），
      优先选择预聚合表回答总量、趋势、排名类问题；仅当问题需要预聚合表没有的交易级明细
      （如单笔均价、商品、加油站维度）时，才使用明细表。
 
@@ -108,6 +115,7 @@ _BASE_SYSTEM_PROMPT = """你是 Smart Data Agent —— 一个精准、可靠的
   调用顺序。
 
 - 如果 `execute_metric_dsl` 因 DSL 校验失败而报错，可以检查语义层上下文和下方 Schema 后重试，或换用 `execute_sql` 直接写 SQL。
+- 如果 DoSI 工具已报错一次，不要再重复调用 DoSI；直接回退到 `execute_metric_dsl` 或 `execute_sql`。
 
 回答示例：
 

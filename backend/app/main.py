@@ -23,6 +23,7 @@ from app.memory.checkpointer import build_checkpointer, shutdown_checkpointer
 from app.memory.eval_store import init_eval_store
 from app.memory.review_store import init_review_store
 from app.memory.summary_store import init_summary_store
+from app.semantic.dosi_model import build_dosi_model
 from app.tasks.summarizer import start_summarizer_task
 from app.tools.mcp_loader import init_mcp_tools, shutdown_mcp
 
@@ -48,6 +49,20 @@ async def lifespan(app: FastAPI):
 
     # Build the async checkpointer up-front so the compiled graph can use it.
     checkpointer = await build_checkpointer(settings)
+
+    # Prepare the combined DoSI model file when DoSI MCP is enabled.
+    dosi_proc: asyncio.subprocess.Process | None = None
+    if settings.dosi_mcp_enabled:
+        try:
+            build_dosi_model()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Failed to build DoSI model file: %s", exc)
+
+        if settings.dosi_start_server:
+            dosi_proc = await _start_dosi_server(settings)
+            if dosi_proc is not None:
+                # Give dosi-server a moment to bind before MCP connect.
+                await asyncio.sleep(0.5)
 
     # MCP is best-effort: any failure is logged and we fall back to built-in tools.
     loaded_mcp_tools: list[Any] = []
@@ -111,8 +126,76 @@ async def lifespan(app: FastAPI):
                 semantic_index.close()
             except Exception:
                 pass
+        if dosi_proc is not None:
+            await _stop_dosi_server(dosi_proc)
         await shutdown_mcp()
         await shutdown_checkpointer()
+
+
+async def _start_dosi_server(
+    settings: Any,
+) -> asyncio.subprocess.Process | None:
+    """Start the DoSI MCP server as a local subprocess.
+
+    Returns the subprocess handle, or ``None`` if the binary is missing.
+    """
+    bin_path = str(_settings_attr(settings, "dosi_server_bin", "dosi-server"))
+    try:
+        import shutil
+
+        if not shutil.which(bin_path):
+            logger.warning(
+                "DoSI server binary not found on PATH: %s. "
+                "Set DOSI_SERVER_BIN or install DoSI.",
+                bin_path,
+            )
+            return None
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Could not check for DoSI server binary: %s", exc)
+        return None
+
+    listen = f"{_settings_attr(settings, 'dosi_server_listen_host', '127.0.0.1')}:" \
+             f"{_settings_attr(settings, 'dosi_server_listen_port', 8080)}"
+    model_path = str(_settings_attr(settings, "dosi_model_path", "./data/dosi-model.yaml"))
+    transport = _settings_attr(settings, "dosi_mcp_transport", "streamable_http")
+    transport_value = (
+        transport.value
+        if hasattr(transport, "value")
+        else str(transport)
+    )
+
+    cmd = [
+        bin_path,
+        "--model", model_path,
+        "--listen", listen,
+        "--transport", transport_value,
+    ]
+    logger.info("Starting DoSI server: %s", " ".join(cmd))
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        return proc
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Failed to start DoSI server: %s", exc)
+        return None
+
+
+async def _stop_dosi_server(proc: asyncio.subprocess.Process) -> None:
+    """Gracefully terminate the embedded DoSI server subprocess."""
+    try:
+        if proc.returncode is None:
+            proc.terminate()
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.warning("DoSI server did not exit gracefully; killing it")
+                proc.kill()
+                await proc.wait()
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Error stopping DoSI server: %s", exc)
 
 
 def create_app() -> FastAPI:
