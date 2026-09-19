@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -44,6 +45,74 @@ _CONTEXT_RETENTION_WINDOW = timedelta(hours=2)
 def _utc_now_iso() -> str:
     """Return the current UTC time in ISO-8601 format."""
     return datetime.now(timezone.utc).isoformat()
+
+
+def _plain_str(content: Any) -> str:
+    """Coerce LangChain message content (str | list[dict]) to a flat string."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if text:
+                    parts.append(str(text))
+            elif isinstance(item, str):
+                parts.append(item)
+        return "".join(parts)
+    return str(content)
+
+
+# Process-monologue patterns we strip from the front of assistant content.
+# Despite the system prompt telling the model not to narrate tool usage,
+# some model/versions still emit phrases like
+# "I'll start by getting the semantic context for this dataset." in English,
+# or their Chinese equivalents.
+_LEADING_PROCESS_MONOLOGUE_RE = re.compile(
+    r"^(?:"
+    # Exact phrase from observed bug.
+    r"I(?:'ll| will) start by getting the semantic context for this dataset\.?\s*|"
+    # Generic English narration that announces a tool / planned action.
+    r"(?:I(?:'ll| will|'m going to| am going to| need to| want to| have to)|"
+    r"Let me|Let's|We(?:'ll| will| can))\s+"
+    r"(?:first\s+)?(?:start\s+(?:by|to)\s+)?"
+    r"(?:get|getting|retrieve|retrieving|fetch|fetching|obtain|obtaining|"
+    r"query|querying|call|calling|invoke|invoking|use|using|"
+    r"look(?:\s+at|ing\s+at)?|check|checking|analyze|analyzing|"
+    r"calculate|calculating|compute|computing|search|searching|find out|finding)\s+"
+    r"[^\n#]*?(?:\n(?=#{1,6}\s)|[\.\,，\:\;\!\?]|\Z)\s*|"
+    # Chinese narration that announces a tool / planned action.
+    r"(?:让我先?|我们?先?|(?:我会|我需要|我将|我要)(?:先|会|将)?|"
+    r"首先[，,]?|接下来[，,]?)?"
+    r"(?:查询|调用|获取|得到|查看|检查|分析|计算|检索|搜|查找|查|算)[^\n#]*?"
+    r"(?:\n(?=#{1,6}\s)|[。，\.\:,;!\?]|\Z)\s*"
+    r")",
+    re.IGNORECASE | re.UNICODE,
+)
+
+
+def _sanitize_ai_content(content: Any, has_tool_calls: bool) -> str:
+    """Strip process monologues from assistant content.
+
+    - When the model decided to call a tool, its content must be empty.
+      The system prompt already requires this, but some models still emit a
+      short narration before tool_calls; we enforce it post-hoc.
+    - For the final answer we remove leading English/Chinese prefixes like
+      "I'll start by getting the semantic context..." / "我先查询一下...".
+    """
+    if has_tool_calls:
+        return ""
+
+    text = _plain_str(content).strip()
+    # Iterate: models sometimes emit several short process sentences in a row
+    # before the real answer (rare, but cheap to collapse).
+    for _ in range(3):
+        cleaned = _LEADING_PROCESS_MONOLOGUE_RE.sub("", text).strip()
+        if cleaned == text:
+            break
+        text = cleaned
+    return text
 
 
 def _msg_timestamp(msg: BaseMessage) -> datetime | None:
@@ -243,7 +312,12 @@ async def _call_llm(
     # Use async invoke so LangGraph's astream_events() emits per-token
     # ``on_chat_model_stream`` events; the sync .invoke() blocks the event
     # loop and causes ``message → done → end`` with zero ``token`` frames.
-    return await chat.ainvoke(llm_messages)
+    response: AIMessage = await chat.ainvoke(llm_messages)
+    response.content = _sanitize_ai_content(
+        response.content,
+        bool(getattr(response, "tool_calls", None)),
+    )
+    return response
 
 
 def make_agent_node():
