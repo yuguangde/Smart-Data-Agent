@@ -65,6 +65,9 @@ _BASE_SYSTEM_PROMPT = """你是 Smart Data Agent —— 一个精准、可靠的
   1. 先调用 `get_semantic_context` 获取语义层中的数据集、指标和维度白名单；
   2. 根据语义层信息构造合法的 MetricQuery DSL JSON，调用 `execute_metric_dsl`；
   3. 拿到结果后，用 Markdown 表格或列表展示关键数据，并给出分析结论。
+  4. 如果语义层中同时存在预聚合表（如 `yearmonth`）和明细表（如 `transactions_1k`），
+     优先选择预聚合表回答总量、趋势、排名类问题；仅当问题需要预聚合表没有的交易级明细
+     （如单笔均价、商品、加油站维度）时，才使用明细表。
 
 - **自由探索、表结构查询、复杂 SQL** 类问题：
   1. 先明确要查什么，再调用 `execute_sql` 执行只读 SQL；

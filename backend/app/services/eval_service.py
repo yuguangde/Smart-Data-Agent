@@ -158,6 +158,13 @@ def _build_ossie_context(db_name: str) -> str:
         lines.append(f"\n- Table: {ds.source}")
         raw = ds.raw or {}
 
+        agg = raw.get("aggregation_level")
+        if agg:
+            lines.append(f"  Aggregation level: {agg}")
+        preferred = raw.get("preferred_for")
+        if preferred:
+            lines.append(f"  Preferred for: {', '.join(preferred)}")
+
         ds_description = raw.get("description") or ""
         if ds_description:
             lines.append(f"  Description:\n    {ds_description.strip()}")
@@ -233,6 +240,15 @@ def _build_bird_message(
         "- You can use aggregate expressions in ORDER BY without selecting them.\n"
         "- For 'least/most' questions, remember to GROUP BY the entity and "
         "ORDER BY the SUM/aggregated value.\n"
+        "\n"
+        "Table preference rule:\n"
+        "- When the question involves customer consumption, monthly consumption, or "
+        "ranking customers by total consumption, always query `yearmonth` first.\n"
+        "- Only join `transactions_1k` for details that are NOT in `yearmonth`, "
+        "such as per-transaction unit price, product breakdown, gas station breakdown, "
+        "or transaction-level time.\n"
+        "- Remember: `transactions_1k` is only a 4-day sample, so it cannot represent "
+        "a customer's total consumption accurately.\n"
         "For example, for 'who had the least consumption in LAM in 2012', use:\n"
         "  SELECT c.CustomerID\n"
         "  FROM customers c JOIN yearmonth y ON c.CustomerID = y.CustomerID\n"

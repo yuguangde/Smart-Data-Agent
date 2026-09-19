@@ -142,6 +142,13 @@ semantic_model:
       - name: yearmonth
         source: yearmonth
         display_name: 客户月度消费汇总
+        aggregation_level: monthly
+        preferred_for:
+          - 客户月度消费
+          - 客户消费排名
+          - 总消费量
+          - 最高消费客户
+          - 最低消费客户
         description: |
           核心事实表。按客户 + 月份汇总消费量。
           DDL: CREATE TABLE yearmonth (CustomerID INTEGER NOT NULL, Date TEXT NOT NULL, Consumption REAL, PRIMARY KEY (Date, CustomerID), FOREIGN KEY (CustomerID) REFERENCES customers(CustomerID))
@@ -216,6 +223,13 @@ semantic_model:
       - name: transactions_1k
         source: transactions_1k
         display_name: 交易明细
+        aggregation_level: transaction
+        preferred_for:
+          - 交易级明细
+          - 单笔均价
+          - 按商品分析
+          - 按加油站分析
+          - 按交易时间分析
         description: |
           抽样交易明细。
           DDL: CREATE TABLE transactions_1k (TransactionID INTEGER PRIMARY KEY AUTOINCREMENT, Date DATE, Time TEXT, CustomerID INTEGER, CardID INTEGER, GasStationID INTEGER, ProductID INTEGER, Amount INTEGER, Price REAL)
@@ -231,6 +245,7 @@ semantic_model:
         notes:
           - 仅包含 2012-08-23 至 2012-08-26 的抽样记录。
           - Price 为交易总价（不是单价），金额/花费口径使用 Price。
+          - 当问题涉及客户月度消费总量或客户消费排名时，应优先使用 yearmonth 表；本表只用于 yearmonth 无法提供的交易级明细（商品、加油站、单笔均价、交易时间等）。
         dimensions:
           - name: TransactionID
             display_name: 交易 ID

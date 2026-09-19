@@ -335,8 +335,16 @@ class SemanticRegistry:
         lines: list[str] = []
         for ds in self.datasets.values():
             lines.append(f"数据集: {ds.name} (source: {ds.source})")
+            agg = ds.raw.get("aggregation_level")
+            if agg:
+                lines.append(f"  聚合粒度: {agg}")
+            preferred = ds.raw.get("preferred_for")
+            if preferred:
+                lines.append(f"  优先用于: {', '.join(preferred)}")
             lines.append(f"  可用指标: {', '.join(ds.metric_names) or '(none)'}")
             lines.append(f"  可用维度: {', '.join(sorted(ds.dimension_names)) or '(none)'}")
+            for note in ds.raw.get("notes") or []:
+                lines.append(f"  注意: {note}")
         return "\n".join(lines)
 
 
