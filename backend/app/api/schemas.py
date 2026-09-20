@@ -234,7 +234,14 @@ class HealthResponse(BaseModel):
     llm_provider: str
     checkpointer: str
     hitl: bool
-    mcp: MCPServerStatus = Field(default_factory=MCPServerStatus)
+    mcp: MCPServerStatus = Field(
+        default_factory=MCPServerStatus,
+        description="Legacy single-server MCP status (kept for backwards compatibility).",
+    )
+    servers: dict[str, MCPServerStatus] = Field(
+        default_factory=dict,
+        description="Per-MCP-server status map (starrocks, dosi, ...).",
+    )
 
 
 __all__ = [
@@ -244,6 +251,7 @@ __all__ = [
     "ToolApprovalResume",
     "ThreadCreateResponse",
     "ThreadHistory",
+    "MCPServerStatus",
     "ReviewRequest",
     "ReviewComparison",
     "ReviewResponse",

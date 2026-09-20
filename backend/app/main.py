@@ -154,8 +154,8 @@ async def _start_dosi_server(
         logger.warning("Could not check for DoSI server binary: %s", exc)
         return None
 
-    listen = f"{_settings_attr(settings, 'dosi_server_listen_host', '127.0.0.1')}:" \
-             f"{_settings_attr(settings, 'dosi_server_listen_port', 8080)}"
+    bind = f"{_settings_attr(settings, 'dosi_server_listen_host', '127.0.0.1')}:" \
+           f"{_settings_attr(settings, 'dosi_server_listen_port', 8080)}"
     model_path = str(_settings_attr(settings, "dosi_model_path", "./data/dosi-model.yaml"))
     transport = _settings_attr(settings, "dosi_mcp_transport", "streamable_http")
     transport_value = (
@@ -164,12 +164,14 @@ async def _start_dosi_server(
         else str(transport)
     )
 
+    # dosi-server uses --bind for HTTP and --mcp-stdio for stdio MCP.
     cmd = [
         bin_path,
         "--model", model_path,
-        "--listen", listen,
-        "--transport", transport_value,
+        "--bind", bind,
     ]
+    if transport_value == "stdio":
+        cmd.append("--mcp-stdio")
     logger.info("Starting DoSI server: %s", " ".join(cmd))
     try:
         proc = await asyncio.create_subprocess_exec(

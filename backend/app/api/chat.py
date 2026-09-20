@@ -35,40 +35,68 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["chat"])
 
 
+def _server_status_from(raw: dict[str, Any] | None) -> MCPServerStatus:
+    """Convert an MCP status dict into a typed schema model."""
+    raw = raw or {}
+    return MCPServerStatus(
+        enabled=bool(raw.get("enabled", False)),
+        configured=bool(raw.get("configured", False)),
+        connected=bool(raw.get("connected", False)),
+        server_name=str(raw.get("server_name", "")),
+        url=str(raw.get("url", "")),
+        transport=str(raw.get("transport", "")),
+        tool_count=int(raw.get("tool_count", 0)),
+        tool_names=list(raw.get("tool_names", [])),
+        error=raw.get("error"),
+    )
+
+
 @router.get("/health", response_model=HealthResponse, summary="Liveness/readiness probe")
 async def health() -> HealthResponse:
     settings = get_settings()
     mcp_status = mcp_tools_status() or {}
+
+    # Build per-server status map. Fall back to a single StarRocks entry when the
+    # loader has not yet produced a multi-server payload.
+    servers_raw: dict[str, dict[str, Any]] = mcp_status.get("servers") or {}
+    if not servers_raw:
+        servers_raw = {settings.mcp_server_name: mcp_status.get("mcp") or {}}
+    servers = {
+        name: _server_status_from(raw)
+        for name, raw in servers_raw.items()
+    }
+
+    # If any enabled+configured server is not connected, the instance is degraded.
+    overall = "ok"
+    for status in servers.values():
+        if status.enabled and status.configured and not status.connected:
+            overall = "degraded"
+            break
+
+    # Preserve the legacy single-server entry for backwards compatibility.
     legacy_mcp = mcp_status.get("mcp") or {}
-    mcp_block_required = bool(
-        settings.mcp_enabled and settings.mcp_url
-    )
-    mcp_connected = bool(legacy_mcp.get("connected"))
-    overall = (
-        "degraded"
-        if mcp_block_required and not mcp_connected
-        else "ok"
-    )
+    legacy = _server_status_from(legacy_mcp)
+    if not legacy.server_name and settings.mcp_server_name:
+        legacy.server_name = settings.mcp_server_name
+    if not legacy.url and settings.mcp_url:
+        legacy.url = settings.mcp_url
+    if not legacy.transport and settings.mcp_transport:
+        legacy.transport = (
+            settings.mcp_transport.value
+            if hasattr(settings.mcp_transport, "value")
+            else str(settings.mcp_transport)
+        )
+    if not legacy.configured and settings.mcp_enabled and settings.mcp_url:
+        legacy.enabled = settings.mcp_enabled
+        legacy.configured = True
+
     return HealthResponse(
         status=overall,
         llm_provider=settings.llm_provider.value,
         checkpointer=settings.checkpointer.value,
         hitl=settings.hitl,
-        mcp=MCPServerStatus(
-            enabled=bool(settings.mcp_enabled),
-            configured=bool(settings.mcp_enabled and settings.mcp_url),
-            connected=mcp_connected,
-            server_name=str(
-                legacy_mcp.get("server_name") or settings.mcp_server_name
-            ),
-            url=str(legacy_mcp.get("url") or settings.mcp_url),
-            transport=str(
-                legacy_mcp.get("transport") or settings.mcp_transport
-            ),
-            tool_count=int(legacy_mcp.get("tool_count", 0)),
-            tool_names=list(legacy_mcp.get("tool_names", [])),
-            error=legacy_mcp.get("error"),
-        ),
+        mcp=legacy,
+        servers=servers,
     )
 
 
