@@ -9,7 +9,7 @@ semantic_model:
     relationships:
       - from: customers.CustomerID
         to: yearmonth.CustomerID
-        type: one_to_many
+        # type: one_to_many
         description: 一个客户在 yearmonth 中有多个历史月份记录。
       - from: customers.CustomerID
         to: transactions_1k.CustomerID
