@@ -181,17 +181,41 @@ class SemanticRegistry:
             if isinstance(raw_datasets, dict):
                 raw_datasets = [raw_datasets]
 
+            dataset_names = [
+                raw_ds.get("name", model_name) for raw_ds in raw_datasets
+            ]
+
+            # Distribute model-level metrics to the dataset they reference most.
+            # Dataset-level metrics override the model-level ones for that dataset.
+            dataset_metrics_map: dict[str, list[SemanticMetric]] = {
+                name: [] for name in dataset_names
+            }
+            for metric in model_metrics:
+                preferred = self._metric_dataset_preference(
+                    metric.expression, dataset_names
+                )
+                if preferred and preferred in dataset_metrics_map:
+                    dataset_metrics_map[preferred].append(metric)
+                else:
+                    # No clear home dataset: make it visible from every dataset.
+                    for name in dataset_names:
+                        dataset_metrics_map[name].append(metric)
+
             for raw_ds in raw_datasets:
                 ds_name = raw_ds.get("name", model_name)
                 if "metrics" in raw_ds:
                     ds_metrics = self._parse_metrics(raw_ds["metrics"])
                 else:
-                    ds_metrics = list(model_metrics)
+                    ds_metrics = dataset_metrics_map.get(ds_name, list(model_metrics))
 
+                # Support both legacy ``dimensions`` and DoSI-native ``fields``.
                 ds_dimensions = self._parse_dimensions(
                     raw_ds.get("dimensions") or []
                 )
-                declared_dims = model_dimensions + ds_dimensions
+                field_dimensions = self._parse_fields(
+                    raw_ds.get("fields") or []
+                )
+                declared_dims = model_dimensions + ds_dimensions + field_dimensions
                 inferred_dim_names = self._infer_dimensions(ds_metrics)
                 dimensions = declared_dims or [
                     SemanticDimension(name=n) for n in inferred_dim_names
@@ -278,6 +302,40 @@ class SemanticRegistry:
             else:
                 logger.warning("Ignoring unknown dimension declaration: %s", raw)
         return result
+
+    @staticmethod
+    def _parse_fields(raw_fields: list[Any]) -> list[SemanticDimension]:
+        """Parse DoSI-style ``fields`` as dimensions."""
+        result: list[SemanticDimension] = []
+        for raw in raw_fields:
+            if isinstance(raw, dict):
+                dim_info = raw.get("dimension") or {}
+                result.append(
+                    SemanticDimension(
+                        name=raw.get("name", ""),
+                        data_type=raw.get("datatype", "string"),
+                        format=raw.get("format"),
+                        description=raw.get("description"),
+                        is_time=bool(dim_info.get("is_time", False)) if isinstance(dim_info, dict) else False,
+                    )
+                )
+            else:
+                logger.warning("Ignoring unknown field declaration: %s", raw)
+        return result
+
+    @staticmethod
+    def _metric_dataset_preference(metric_expr: str, dataset_names: list[str]) -> str | None:
+        """Return the dataset most referenced in a metric expression, if any."""
+        if not metric_expr:
+            return None
+        scores = {
+            ds: metric_expr.count(f"{ds}.")
+            for ds in dataset_names
+            if f"{ds}." in metric_expr
+        }
+        if not scores:
+            return None
+        return max(scores, key=scores.get)
 
     def _infer_dimensions(self, metrics: list[SemanticMetric]) -> list[str]:
         """Infer candidate dimension fields from metric expressions/filters."""

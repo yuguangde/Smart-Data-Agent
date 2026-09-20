@@ -1,23 +1,21 @@
 """Combine project OSSIE YAML files into a single DoSI-compatible model entrypoint.
 
-DoSI expects one Apache Ossie model file on the command line, but its supported
-schema is a little different from the project's richer YAML format:
+DoSI expects one Apache Ossie model file on the command line. The project keeps
+multiple ``*.ossie.yml`` files under ``backend/ossie/``. This module merges them
+into one combined YAML at startup so DoSI can consume the full semantic layer.
 
-- ``version`` is required at the top level.
-- Dataset attributes and dimensions are flattened into ``fields``.
-- Metrics live at the ``semantic_model`` level (not inside datasets) and their
-  expressions are table-qualified, e.g. ``SUM(yearmonth.Consumption)``.
-- Relationships use ``from`` / ``to`` table names plus ``from_columns`` /
-  ``to_columns`` with required relationship ``name``.
+The OSSIE files are assumed to be already DoSI-compatible (``fields`` instead of
+``dimensions``, metrics at the ``semantic_model`` level, relationships without
+``type``/``description``). The only transformations performed here are:
 
-This module merges multiple ``*.ossie.yml`` files under ``backend/ossie/`` and
-normalises them into ``backend/data/dosi-model.yaml`` so DoSI can consume the
-full semantic layer.
+- Merge multiple ``semantic_model`` entries into **one** (DoSI allows exactly one
+  per document).
+- Strip unsupported fields from relationships if they still carry legacy ones
+  (``type``, ``description``), and auto-generate a relationship ``name``.
 """
 from __future__ import annotations
 
 import logging
-import re
 from pathlib import Path
 from typing import Any
 
@@ -42,42 +40,6 @@ _SUPPORTED_REL_FIELDS = {
 }
 
 
-_SUPPORTED_DATASET_FIELDS = {
-    "name",
-    "source",
-    "primary_key",
-    "unique_keys",
-    "description",
-    "ai_context",
-    "fields",
-    "custom_extensions",
-}
-
-
-_SUPPORTED_FIELD_FIELDS = {
-    "name",
-    "expression",
-    "datatype",
-    "description",
-    "dimension",
-    "ai_context",
-    "custom_extensions",
-}
-
-
-_SUPPORTED_METRIC_FIELDS = {
-    "name",
-    "expression",
-    "datatype",
-    "description",
-    "ai_context",
-    "custom_extensions",
-}
-
-
-_SQL_DIALECT = "ANSI_SQL"
-
-
 def _split_table_column(value: Any) -> tuple[str, list[str]]:
     """Split a ``table.column`` reference into table name and column list."""
     text = str(value)
@@ -90,9 +52,11 @@ def _split_table_column(value: Any) -> tuple[str, list[str]]:
 def _clean_relationship(rel: dict[str, Any]) -> dict[str, Any]:
     """Normalise a relationship so DoSI's parser accepts it.
 
-    DoSI expects ``from`` to be the many-side dataset (fact) and ``to`` the
-    one-side dataset (dimension). Our OSSIE files write ``type: one_to_many``
-    from dimension to fact, so we flip the direction when converting.
+    Legacy project files sometimes write ``type: one_to_many`` and put the
+    dimension on the ``from`` side. DoSI expects ``from`` to be the many-side
+    dataset (fact) and ``to`` the one-side dataset (dimension). When an explicit
+    ``one_to_many`` type is present we flip the direction. For DoSI-native files
+    without ``type`` we keep the direction as-is.
     """
     cleaned = {k: v for k, v in rel.items() if k in _SUPPORTED_REL_FIELDS}
     rel_type = str(rel.get("type", "")).lower()
@@ -100,14 +64,10 @@ def _clean_relationship(rel: dict[str, Any]) -> dict[str, Any]:
     raw_from = cleaned.get("from")
     raw_to = cleaned.get("to")
 
-    # Project convention when type is absent: from=one side (dimension),
-    # to=many side (fact). DoSI convention: from=many side, to=one side.
-    if rel_type in ("", "one_to_many"):
+    # Legacy one_to_many: from=one side (dim), to=many side (fact).
+    # DoSI convention: from=many side, to=one side.
+    if raw_from is not None and raw_to is not None and rel_type == "one_to_many":
         raw_from, raw_to = raw_to, raw_from
-    elif rel_type == "many_to_one":
-        # Already many -> one; keep as-is.
-        pass
-    # For one_to_one keep the original order.
 
     if raw_from is not None:
         table, cols = _split_table_column(raw_from)
@@ -129,214 +89,15 @@ def _clean_relationship(rel: dict[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
-def _column_expression(column: str, dataset_name: str) -> dict[str, Any]:
-    """Return a DoSI field expression referencing a dataset column."""
-    return {
-        "dialects": [
-            {
-                "dialect": _SQL_DIALECT,
-                "expression": f"{dataset_name}.{column}",
-            }
-        ]
-    }
-
-
-def _metric_expression(
-    expression: str,
-    dataset_name: str,
-    dimension_columns: list[str],
-) -> dict[str, Any]:
-    """Rewrite a dataset-scoped SQL expression using table-qualified columns.
-
-    Example: ``COUNT(DISTINCT CustomerID)`` inside the ``customers`` dataset
-    becomes ``COUNT(DISTINCT customers.CustomerID)``.
-    """
-    rewritten = expression
-    # Sort by length desc so that ``CustomerID`` is replaced before ``ID``.
-    for col in sorted(dimension_columns, key=len, reverse=True):
-        # Match the column as a whole word outside of quoted strings.
-        rewritten = re.sub(rf"\b{re.escape(col)}\b", f"{dataset_name}.{col}", rewritten)
-    return {
-        "dialects": [
-            {
-                "dialect": _SQL_DIALECT,
-                "expression": rewritten,
-            }
-        ]
-    }
-
-
-def _build_field(
-    dim: dict[str, Any],
-    dataset_name: str,
-) -> dict[str, Any]:
-    """Convert a project dimension definition into a DoSI field."""
-    field: dict[str, Any] = {
-        "name": dim["name"],
-        "expression": _column_expression(str(dim["name"]), dataset_name),
-    }
-    if dim.get("description"):
-        field["description"] = dim["description"]
-    if dim.get("is_time"):
-        field["dimension"] = {"is_time": bool(dim["is_time"])}
-    if dim.get("ai_context"):
-        field["ai_context"] = dim["ai_context"]
-    # Preserve any custom extension data if present.
-    for extra in ("custom_extensions",):
-        if extra in dim:
-            field[extra] = dim[extra]
-    return field
-
-
-def _build_metric(
-    metric: dict[str, Any],
-    dataset_name: str,
-    dimension_columns: list[str],
-) -> dict[str, Any]:
-    """Convert a dataset-scoped project metric into a top-level DoSI metric."""
-    name = metric["name"]
-    expression_text = ""
-    expr = metric.get("expression")
-    if isinstance(expr, dict):
-        dialects = expr.get("dialects", [])
-        if dialects:
-            expression_text = str(dialects[0].get("expression", ""))
-        else:
-            expression_text = str(expr.get("expression", ""))
-    else:
-        expression_text = str(expr or "")
-
-    out: dict[str, Any] = {
-        "name": name,
-        "expression": _metric_expression(expression_text, dataset_name, dimension_columns),
-    }
-    for key in ("description", "ai_context", "custom_extensions"):
-        if metric.get(key):
-            out[key] = metric[key]
-    return out
-
-
-def _clean_dataset(dataset: dict[str, Any]) -> dict[str, Any]:
-    """Convert one of our dataset definitions into a DoSI-compatible dataset."""
-    name = str(dataset.get("name", ""))
-    source = str(dataset.get("source", name))
-
-    out: dict[str, Any] = {"name": name, "source": source}
-
-    for key in ("primary_key", "unique_keys"):
-        if key in dataset:
-            out[key] = dataset[key]
-    if dataset.get("description"):
-        out["description"] = dataset["description"]
-    if dataset.get("ai_context"):
-        out["ai_context"] = dataset["ai_context"]
-    if dataset.get("custom_extensions"):
-        out["custom_extensions"] = dataset["custom_extensions"]
-
-    # Build fields from dimensions.
-    dimension_names: list[str] = []
-    fields: list[dict[str, Any]] = []
-    for dim in dataset.get("dimensions", []) or []:
-        if not isinstance(dim, dict):
-            continue
-        dim_name = str(dim.get("name", ""))
-        if dim_name:
-            dimension_names.append(dim_name)
-        fields.append(_build_field(dim, name))
-
-    if fields:
-        out["fields"] = fields
-
-    # Metrics are returned separately and attached at the semantic_model level.
-    metrics: list[dict[str, Any]] = [
-        _build_metric(m, name, dimension_names)
-        for m in (dataset.get("metrics", []) or [])
-        if isinstance(m, dict)
-    ]
-
-    return out, metrics
-
-
-def _normalize_expression(value: Any, dataset_name: str = "") -> dict[str, Any]:
-    """Return a DoSI-compatible expression block.
-
-    Accepts either a raw SQL string or an already structured expression dict.
-    """
-    if isinstance(value, dict) and "dialects" in value:
-        return value
-    text = str(value or "")
-    if dataset_name and text:
-        # Best-effort prefix any bare column with the dataset name.
-        # This won't rewrite partial identifiers, but handles simple metrics.
-        pass
-    return {
-        "dialects": [
-            {
-                "dialect": _SQL_DIALECT,
-                "expression": text,
-            }
-        ]
-    }
-
-
-def _clean_semantic_model(model: dict[str, Any]) -> dict[str, Any]:
-    """Convert one project semantic model into a DoSI-compatible model."""
-    out: dict[str, Any] = {}
-    for key in ("name", "description"):
-        if key in model:
-            out[key] = model[key]
-    if model.get("ai_context"):
-        out["ai_context"] = model["ai_context"]
-    if model.get("custom_extensions"):
-        out["custom_extensions"] = model["custom_extensions"]
-
-    # Datasets.
-    all_metrics: list[dict[str, Any]] = []
-    datasets: list[dict[str, Any]] = []
-    for dataset in model.get("datasets", []) or []:
-        if not isinstance(dataset, dict):
-            continue
-        cleaned_ds, ds_metrics = _clean_dataset(dataset)
-        datasets.append(cleaned_ds)
-        all_metrics.extend(ds_metrics)
-
-    if datasets:
-        out["datasets"] = datasets
-
-    # Relationships.
-    relationships: list[dict[str, Any]] = [
-        _clean_relationship(rel)
-        for rel in model.get("relationships", []) or []
-        if isinstance(rel, dict)
-    ]
-    if relationships:
-        out["relationships"] = relationships
-
-    # Metrics at semantic_model level.
-    # Also include any metrics already defined at the model level.
-    for m in (model.get("metrics", []) or []):
-        if not isinstance(m, dict):
-            continue
-        cleaned_metric = {k: v for k, v in m.items() if k in _SUPPORTED_METRIC_FIELDS}
-        if "expression" in cleaned_metric:
-            cleaned_metric["expression"] = _normalize_expression(cleaned_metric["expression"])
-        all_metrics.append(cleaned_metric)
-
-    if all_metrics:
-        out["metrics"] = all_metrics
-
-    return out
+def _load_yaml(path: Path) -> dict[str, Any]:
+    """Load a YAML file and return the top-level mapping."""
+    with path.open("r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
 
 
 def _default_ossie_dir() -> Path:
     """Return the directory where ``*.ossie.yml`` files live."""
     return Path(BASE_DIR) / "ossie"
-
-
-def _load_yaml(path: Path) -> dict[str, Any]:
-    """Load a YAML file and return the top-level mapping."""
-    with path.open("r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
 
 
 def build_dosi_model(
@@ -373,6 +134,7 @@ def build_dosi_model(
     # Use configured glob patterns so DoSI can be scoped to compatible OSSIE files.
     if file_patterns is None:
         file_patterns = list(get_settings().dosi_ossie_files) or ["*.ossie.yml"]
+
     seen_paths: set[Path] = set()
     models: list[dict[str, Any]] = []
     for pattern in file_patterns:
@@ -393,7 +155,14 @@ def build_dosi_model(
     if not models:
         logger.warning("No semantic models found in %s", ossie_dir)
 
-    cleaned_models = [_clean_semantic_model(m) for m in models]
+    # Clean relationships in every model.
+    for model in models:
+        if isinstance(model.get("relationships"), list):
+            model["relationships"] = [
+                _clean_relationship(rel)
+                for rel in model["relationships"]
+                if isinstance(rel, dict)
+            ]
 
     # DoSI expects exactly one semantic_model per document, so merge all project
     # models into a single entry while preserving dataset/relationship/metric names.
@@ -401,18 +170,18 @@ def build_dosi_model(
         "name": "smart_data_agent",
         "description": "Combined semantic model for Smart Data Agent.",
     }
-    for key in ("description", "ai_context"):
-        if cleaned_models and cleaned_models[0].get(key):
-            combined_model[key] = cleaned_models[0][key]
-    if cleaned_models:
-        combined_model["name"] = cleaned_models[0].get("name", "smart_data_agent")
-        if "description" in cleaned_models[0]:
-            combined_model["description"] = cleaned_models[0]["description"]
+    if models:
+        first = models[0]
+        combined_model["name"] = first.get("name", "smart_data_agent")
+        if "description" in first:
+            combined_model["description"] = first["description"]
+        if "ai_context" in first:
+            combined_model["ai_context"] = first["ai_context"]
 
     for key in ("datasets", "relationships", "metrics"):
         values: list[Any] = []
-        for m in cleaned_models:
-            values.extend(m.get(key, []))
+        for model in models:
+            values.extend(model.get(key, []))
         if values:
             combined_model[key] = values
 

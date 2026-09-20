@@ -14,35 +14,57 @@ def ossie_dir(tmp_path: Path) -> Path:
     d = tmp_path / "ossie"
     d.mkdir()
     (d / "a.ossie.yml").write_text(
+        'version: "0.2.0.dev0"\n'
         "semantic_model:\n"
         "  - name: model_a\n"
         "    datasets:\n"
         "      - name: ds1\n"
         "        source: t1\n"
-        "        dimensions:\n"
-        "          - name: x\n"
-        "        metrics:\n"
-        "          - name: m1\n"
-            "            expression:\n"
+        "        primary_key: [id]\n"
+        "        fields:\n"
+        "          - name: id\n"
+        "            expression:\n"
         "              dialects:\n"
         "                - dialect: ANSI_SQL\n"
-        "                  expression: SUM(x)\n",
+        "                  expression: ds1.id\n"
+        "          - name: x\n"
+        "            expression:\n"
+        "              dialects:\n"
+        "                - dialect: ANSI_SQL\n"
+        "                  expression: ds1.x\n"
+        "    metrics:\n"
+        "      - name: m1\n"
+        "        expression:\n"
+        "          dialects:\n"
+        "            - dialect: ANSI_SQL\n"
+        "              expression: SUM(ds1.x)\n",
         encoding="utf-8",
     )
     (d / "b.ossie.yml").write_text(
+        'version: "0.2.0.dev0"\n'
         "semantic_model:\n"
         "  - name: model_b\n"
         "    datasets:\n"
         "      - name: ds2\n"
         "        source: t2\n"
-        "        dimensions:\n"
-        "          - name: y\n"
-        "        metrics:\n"
-        "          - name: m2\n"
+        "        primary_key: [id]\n"
+        "        fields:\n"
+        "          - name: id\n"
         "            expression:\n"
         "              dialects:\n"
         "                - dialect: ANSI_SQL\n"
-        "                  expression: SUM(y)\n",
+        "                  expression: ds2.id\n"
+        "          - name: y\n"
+        "            expression:\n"
+        "              dialects:\n"
+        "                - dialect: ANSI_SQL\n"
+        "                  expression: ds2.y\n"
+        "    metrics:\n"
+        "      - name: m2\n"
+        "        expression:\n"
+        "          dialects:\n"
+        "            - dialect: ANSI_SQL\n"
+        "              expression: SUM(ds2.y)\n",
         encoding="utf-8",
     )
     return d

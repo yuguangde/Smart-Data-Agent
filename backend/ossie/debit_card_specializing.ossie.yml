@@ -1,313 +1,322 @@
+version: "0.2.0.dev0"
+
 semantic_model:
   - name: debit_card_specializing
-    # display_name: 燃料卡 B2B 语义模型
     description: |
       加油站/燃料卡 B2B 业务语义模型，覆盖客户、加油站网点、商品、客户月度消费汇总
       以及抽样交易明细。本模型提供表结构、join 关系与通用业务含义，用于支撑 NL2SQL 生成。
 
-    # ---------------- 表关系 / join 路径 ----------------
-    relationships:
-      - from: customers.CustomerID
-        to: yearmonth.CustomerID
-        # type: one_to_many
-        description: 一个客户在 yearmonth 中有多个历史月份记录。
-      - from: customers.CustomerID
-        to: transactions_1k.CustomerID
-        type: one_to_many
-        description: 一个客户有多笔抽样交易明细。
-      - from: gasstations.GasStationID
-        to: transactions_1k.GasStationID
-        type: one_to_many
-        description: 一个加油站有多笔交易。
-      - from: products.ProductID
-        to: transactions_1k.ProductID
-        type: one_to_many
-        description: 一个商品可出现在多笔交易中。
-
     datasets:
       - name: customers
         source: customers
-        display_name: 客户主数据
+        primary_key:
+          - CustomerID
         description: |
           企业客户（燃料卡持卡人）主数据。
           DDL: CREATE TABLE customers (CustomerID INTEGER UNIQUE NOT NULL PRIMARY KEY, Segment TEXT, Currency TEXT)
-        primary_key:
-          - CustomerID
-        notes:
-          - CustomerID 为客户唯一标识、主键。
-          - Segment 表示客户规模层级，Currency 表示结算货币。
-        dimensions:
+        fields:
           - name: CustomerID
-            display_name: 客户 ID
-            data_type: integer
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: customers.CustomerID
+            datatype: Integer
             description: 客户唯一标识，主键。
           - name: Segment
-            display_name: 客户细分
-            data_type: string
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: customers.Segment
+            datatype: String
             description: |
               客户规模层级。SME=中小企业，LAM=大客户，KAM=重点客户。
               常见问题中会直接用 SME/LAM/KAM 指代客户群体。
-            values:
-              - SME
-              - LAM
-              - KAM
           - name: Currency
-            display_name: 结算货币
-            data_type: string
-            description: 客户结算货币，CZK 为捷克克朗，EUR 为欧元。
-            values:
-              - CZK
-              - EUR
-        metrics:
-          - name: customer_count
-            display_name: 客户数
-            description: 去重客户数量。
             expression:
               dialects:
                 - dialect: ANSI_SQL
-                  expression: COUNT(DISTINCT CustomerID)
+                  expression: customers.Currency
+            datatype: String
+            description: 客户结算货币，CZK 为捷克克朗，EUR 为欧元。
 
       - name: gasstations
         source: gasstations
-        display_name: 加油站网点
+        primary_key:
+          - GasStationID
         description: |
           加油站网点信息，包括国家、连锁品牌与档次定位。
           DDL: CREATE TABLE gasstations (GasStationID INTEGER UNIQUE NOT NULL PRIMARY KEY, ChainID INTEGER, Country TEXT, Segment TEXT)
-        primary_key:
-          - GasStationID
-        notes:
-          - GasStationID 为加油站唯一标识、主键。
-          - 此处的 Segment 表示加油站档次，与客户表 Segment 含义不同。
-        dimensions:
+        fields:
           - name: GasStationID
-            display_name: 加油站 ID
-            data_type: integer
-          - name: ChainID
-            display_name: 连锁品牌 ID
-            data_type: integer
-          - name: Country
-            display_name: 国家
-            data_type: string
-            description: 国家代码，CZE=捷克，SVK=斯洛伐克，不是完整国名。
-            values:
-              - CZE
-              - SVK
-          - name: Segment
-            display_name: 加油站档次
-            data_type: string
-            description: 加油站定位/档次；与客户表的 Segment 含义不同。
-            values:
-              - Premium
-              - Discount
-              - "Value for money"
-              - Other
-              - Noname
-        metrics:
-          - name: station_count
-            display_name: 加油站数
-            description: 去重加油站数量。
             expression:
               dialects:
                 - dialect: ANSI_SQL
-                  expression: COUNT(DISTINCT GasStationID)
+                  expression: gasstations.GasStationID
+            datatype: Integer
+          - name: ChainID
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: gasstations.ChainID
+            datatype: Integer
+          - name: Country
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: gasstations.Country
+            datatype: String
+            description: 国家代码，CZE=捷克，SVK=斯洛伐克，不是完整国名。
+          - name: Segment
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: gasstations.Segment
+            datatype: String
+            description: 加油站定位/档次；与客户表的 Segment 含义不同。
 
       - name: products
         source: products
-        display_name: 商品/油品
+        primary_key:
+          - ProductID
         description: |
           商品主数据。
           DDL: CREATE TABLE products (ProductID INTEGER UNIQUE NOT NULL PRIMARY KEY, Description TEXT)
-        primary_key:
-          - ProductID
-        notes:
-          - ProductID 为商品唯一标识、主键。
-          - Description 为本地语言（捷克语、英语等），例如 Diesel、Natural、AdBlue。
-        dimensions:
+        fields:
           - name: ProductID
-            display_name: 商品 ID
-            data_type: integer
-          - name: Description
-            display_name: 商品描述
-            data_type: string
-            description: 商品/油品描述，例如 Nafta、Natural、Diesel、AdBlue 等。
-        metrics:
-          - name: product_count
-            display_name: 商品数
-            description: 去重商品数量。
             expression:
               dialects:
                 - dialect: ANSI_SQL
-                  expression: COUNT(DISTINCT ProductID)
+                  expression: products.ProductID
+            datatype: Integer
+          - name: Description
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: products.Description
+            datatype: String
+            description: 商品/油品描述，例如 Nafta、Natural、Diesel、AdBlue 等。
 
       - name: yearmonth
         source: yearmonth
-        display_name: 客户月度消费汇总
-        aggregation_level: monthly
-        preferred_for:
-          - 客户月度消费
-          - 客户消费排名
-          - 总消费量
-          - 最高消费客户
-          - 最低消费客户
-        description: |
-          核心事实表。按客户 + 月份汇总消费量。
-          DDL: CREATE TABLE yearmonth (CustomerID INTEGER NOT NULL, Date TEXT NOT NULL, Consumption REAL, PRIMARY KEY (Date, CustomerID), FOREIGN KEY (CustomerID) REFERENCES customers(CustomerID))
         primary_key:
           - Date
           - CustomerID
-        foreign_keys:
-          - column: CustomerID
-            references: customers.CustomerID
-        notes:
-          - 主键为 (Date, CustomerID)。
-          - Date 字段格式为 YYYYMM 文本（例如 201207），日期范围 201112 ~ 201311。
-          - 本表用于按月统计客户消费量。
-          - 当问题问“月度消费量最高是多少”或“消费高峰月”时，应先按 SUBSTR(Date, 1, 6) 对 Consumption 求和，再取最大汇总值，不是单条记录的 MAX(Consumption)。
-        dimensions:
+        description: |
+          核心事实表。按客户 + 月份汇总消费量。
+          DDL: CREATE TABLE yearmonth (CustomerID INTEGER NOT NULL, Date TEXT NOT NULL, Consumption REAL, PRIMARY KEY (Date, CustomerID), FOREIGN KEY (CustomerID) REFERENCES customers(CustomerID))
+        fields:
           - name: CustomerID
-            display_name: 客户 ID
-            data_type: integer
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: yearmonth.CustomerID
+            datatype: Integer
             description: 客户 ID，外键关联 customers.CustomerID。
           - name: Date
-            display_name: 月份
-            data_type: string
-            format: yyyyMM
-            is_time: true
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: yearmonth.Date
+            datatype: String
             description: |
               月份，YYYYMM 文本格式。不是标准日期，需要使用 SUBSTR(Date, 1, 4) 取年、SUBSTR(Date, 5, 2) 取月。
+            dimension:
+              is_time: true
           - name: Consumption
-            display_name: 当月消费量
-            data_type: number
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: yearmonth.Consumption
+            datatype: Float
             description: 客户当月的消费量汇总。
-        metrics:
-          - name: total_consumption
-            display_name: 消费总量
-            description: 消费量合计。
-            expression:
-              dialects:
-                - dialect: ANSI_SQL
-                  expression: SUM(Consumption)
-          - name: avg_monthly_consumption
-            display_name: 月均消费量
-            description: |
-              月均消费量 = AVG(Consumption) / 12。
-              常用于计算某年度/某客户群的平均每月消费量。
-            ai_context:
-              instructions: 当问题出现“平均月消费量”时，使用该指标。
-            expression:
-              dialects:
-                - dialect: ANSI_SQL
-                  expression: AVG(Consumption) / 12
-          - name: max_monthly_consumption
-            display_name: 最大月消费量
-            description: |
-              月度消费峰值，即按月份汇总后的最大消费量。
-              计算方式：按 SUBSTR(Date, 1, 6) 对 Consumption 求和，再取最大值。
-            ai_context:
-              instructions: |
-                当问题出现“月度消费量最高是多少”或“消费高峰月”时，使用该指标。
-                不要直接使用 MAX(Consumption)（那是单条记录的最大值），
-                而要先按月份（SUBSTR(Date, 1, 6)）汇总，再取最大汇总值。
-            expression:
-              dialects:
-                - dialect: ANSI_SQL
-                  expression: MAX(Consumption)
-          - name: min_monthly_consumption
-            display_name: 最小月消费量
-            description: 最小月度消费量。
-            expression:
-              dialects:
-                - dialect: ANSI_SQL
-                  expression: MIN(Consumption)
 
       - name: transactions_1k
         source: transactions_1k
-        display_name: 交易明细
-        aggregation_level: transaction
-        preferred_for:
-          - 交易级明细
-          - 单笔均价
-          - 按商品分析
-          - 按加油站分析
-          - 按交易时间分析
+        primary_key:
+          - TransactionID
         description: |
           抽样交易明细。
           DDL: CREATE TABLE transactions_1k (TransactionID INTEGER PRIMARY KEY AUTOINCREMENT, Date DATE, Time TEXT, CustomerID INTEGER, CardID INTEGER, GasStationID INTEGER, ProductID INTEGER, Amount INTEGER, Price REAL)
-        primary_key:
-          - TransactionID
-        foreign_keys:
-          - column: CustomerID
-            references: customers.CustomerID
-          - column: GasStationID
-            references: gasstations.GasStationID
-          - column: ProductID
-            references: products.ProductID
-        notes:
-          - 仅包含 2012-08-23 至 2012-08-26 的抽样记录。
-          - Price 为交易总价（不是单价），金额/花费口径使用 Price。
-          - 当问题涉及客户月度消费总量或客户消费排名时，应优先使用 yearmonth 表；本表只用于 yearmonth 无法提供的交易级明细（商品、加油站、单笔均价、交易时间等）。
-        dimensions:
+        fields:
           - name: TransactionID
-            display_name: 交易 ID
-            data_type: integer
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: transactions_1k.TransactionID
+            datatype: Integer
           - name: Date
-            display_name: 交易日期
-            data_type: date
-            format: yyyy-MM-dd
-            is_time: true
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: transactions_1k.Date
+            datatype: Date
             description: 交易日期，标准日期格式 YYYY-MM-DD。
+            dimension:
+              is_time: true
           - name: Time
-            display_name: 交易时间
-            data_type: string
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: transactions_1k.Time
+            datatype: Time
             description: 交易时间，例如 16:25:00。
           - name: CustomerID
-            display_name: 客户 ID
-            data_type: integer
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: transactions_1k.CustomerID
+            datatype: Integer
             description: 客户 ID，外键关联 customers.CustomerID。
           - name: CardID
-            display_name: 卡 ID
-            data_type: integer
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: transactions_1k.CardID
+            datatype: Integer
           - name: GasStationID
-            display_name: 加油站 ID
-            data_type: integer
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: transactions_1k.GasStationID
+            datatype: Integer
             description: 加油站 ID，外键关联 gasstations.GasStationID。
           - name: ProductID
-            display_name: 商品 ID
-            data_type: integer
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: transactions_1k.ProductID
+            datatype: Integer
             description: 商品 ID，外键关联 products.ProductID。
           - name: Amount
-            display_name: 数量
-            data_type: integer
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: transactions_1k.Amount
+            datatype: Integer
           - name: Price
-            display_name: 总价
-            data_type: number
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: transactions_1k.Price
+            datatype: Float
             description: 交易总价（不是单价），金额/花费口径使用 Price。
-        metrics:
-          - name: transaction_count
-            display_name: 交易笔数
-            description: 去重交易数量。
-            expression:
-              dialects:
-                - dialect: ANSI_SQL
-                  expression: COUNT(DISTINCT TransactionID)
-          - name: total_amount
-            display_name: 总数量
-            description: 交易商品数量合计。
-            expression:
-              dialects:
-                - dialect: ANSI_SQL
-                  expression: SUM(Amount)
-          - name: total_price
-            display_name: 总交易额
-            description: 交易金额合计，对应消费金额/花费口径。
-            expression:
-              dialects:
-                - dialect: ANSI_SQL
-                  expression: SUM(Price)
-          - name: avg_unit_price
-            display_name: 平均单价
-            description: 平均单价 = AVG(Price / Amount)。
-            expression:
-              dialects:
-                - dialect: ANSI_SQL
-                  expression: AVG(CAST(Price AS REAL) / Amount)
+
+    relationships:
+      - name: yearmonth_to_customers
+        from: yearmonth
+        to: customers
+        from_columns:
+          - CustomerID
+        to_columns:
+          - CustomerID
+      - name: transactions_1k_to_customers
+        from: transactions_1k
+        to: customers
+        from_columns:
+          - CustomerID
+        to_columns:
+          - CustomerID
+      - name: transactions_1k_to_gasstations
+        from: transactions_1k
+        to: gasstations
+        from_columns:
+          - GasStationID
+        to_columns:
+          - GasStationID
+      - name: transactions_1k_to_products
+        from: transactions_1k
+        to: products
+        from_columns:
+          - ProductID
+        to_columns:
+          - ProductID
+
+    metrics:
+      - name: customer_count
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: COUNT(DISTINCT customers.CustomerID)
+        datatype: Integer
+        description: 去重客户数量。
+      - name: station_count
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: COUNT(DISTINCT gasstations.GasStationID)
+        datatype: Integer
+        description: 去重加油站数量。
+      - name: product_count
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: COUNT(DISTINCT products.ProductID)
+        datatype: Integer
+        description: 去重商品数量。
+      - name: total_consumption
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: SUM(yearmonth.Consumption)
+        datatype: Float
+        description: 消费量合计。
+      - name: avg_monthly_consumption
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: AVG(yearmonth.Consumption) / 12
+        datatype: Float
+        description: |
+          月均消费量 = AVG(Consumption) / 12。
+          常用于计算某年度/某客户群的平均每月消费量。
+        ai_context:
+          instructions: 当问题出现“平均月消费量”时，使用该指标。
+      - name: max_monthly_consumption
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: MAX(yearmonth.Consumption)
+        datatype: Float
+        description: |
+          月度消费峰值，即按月份汇总后的最大消费量。
+          计算方式：按 SUBSTR(Date, 1, 6) 对 Consumption 求和，再取最大汇总值。
+        ai_context:
+          instructions: |
+            当问题出现“月度消费量最高是多少”或“消费高峰月”时，使用该指标。
+            不要直接使用 MAX(Consumption)（那是单条记录的最大值），
+            而要先按月份（SUBSTR(Date, 1, 6)）汇总，再取最大汇总值。
+      - name: min_monthly_consumption
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: MIN(yearmonth.Consumption)
+        datatype: Float
+        description: 最小月度消费量。
+      - name: transaction_count
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: COUNT(DISTINCT transactions_1k.TransactionID)
+        datatype: Integer
+        description: 去重交易数量。
+      - name: total_amount
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: SUM(transactions_1k.Amount)
+        datatype: Integer
+        description: 交易商品数量合计。
+      - name: total_price
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: SUM(transactions_1k.Price)
+        datatype: Float
+        description: 交易金额合计，对应消费金额/花费口径。
+      - name: avg_unit_price
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: AVG(CAST(transactions_1k.Price AS REAL) / transactions_1k.Amount)
+        datatype: Float
+        description: 平均单价 = AVG(Price / Amount)。
