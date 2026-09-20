@@ -8,7 +8,7 @@ semantic_model:
 
     datasets:
       - name: customers
-        source: customers
+        source: debit_card_specializing.customers
         primary_key:
           - CustomerID
         description: |
@@ -40,7 +40,7 @@ semantic_model:
             description: 客户结算货币，CZK 为捷克克朗，EUR 为欧元。
 
       - name: gasstations
-        source: gasstations
+        source: debit_card_specializing.gasstations
         primary_key:
           - GasStationID
         description: |
@@ -75,7 +75,7 @@ semantic_model:
             description: 加油站定位/档次；与客户表的 Segment 含义不同。
 
       - name: products
-        source: products
+        source: debit_card_specializing.products
         primary_key:
           - ProductID
         description: |
@@ -97,7 +97,7 @@ semantic_model:
             description: 商品/油品描述，例如 Nafta、Natural、Diesel、AdBlue 等。
 
       - name: yearmonth
-        source: yearmonth
+        source: debit_card_specializing.yearmonth
         primary_key:
           - Date
           - CustomerID
@@ -119,9 +119,8 @@ semantic_model:
                   expression: yearmonth.Date
             datatype: String
             description: |
-              月份，YYYYMM 文本格式。不是标准日期，需要使用 SUBSTR(Date, 1, 4) 取年、SUBSTR(Date, 5, 2) 取月。
-            dimension:
-              is_time: true
+              月份，YYYYMM 文本格式。不是标准日期，本表已按客户 + 月份粒度预聚合，
+              按 Date 分组即可得到月度趋势。
           - name: Consumption
             expression:
               dialects:
@@ -131,7 +130,7 @@ semantic_model:
             description: 客户当月的消费量汇总。
 
       - name: transactions_1k
-        source: transactions_1k
+        source: debit_card_specializing.transactions_1k
         primary_key:
           - TransactionID
         description: |

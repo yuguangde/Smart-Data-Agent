@@ -1,0 +1,8 @@
+datasources:
+  starrocks:
+    type: starrocks
+    host: 127.0.0.1
+    port: 9030
+    database: debit_card_specializing
+    username: root
+    password: ""
