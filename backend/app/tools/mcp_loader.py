@@ -325,8 +325,22 @@ class MCPLoader:
                 tools = kept
             return list(tools)[: cfg.max_tools]
 
-        # Explicit whitelist.
+        # Wildcard -> expose every tool (subject to optional write-block).
         allowed_set = set(allowed)
+        if "*" in allowed_set:
+            if cfg.block_writes:
+                kept, dropped = [], []
+                for tool in tools:
+                    (dropped if _looks_writable(getattr(tool, "name", "")) else kept).append(tool)
+                if dropped:
+                    logger.info(
+                        "MCP: filtered out write-capable tool(s): %s",
+                        [getattr(t, "name", "?") for t in dropped],
+                    )
+                tools = kept
+            return list(tools)[: cfg.max_tools]
+
+        # Explicit whitelist.
         kept: list[Any] = []
         dropped: list[str] = []
         for tool in tools:
