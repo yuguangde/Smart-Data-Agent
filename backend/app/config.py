@@ -57,7 +57,7 @@ class _CsvFriendlySourceMixin:
     """
 
     def prepare_field_value(self, field_name, field, field_value, value_is_complex):
-        if field_name == "mcp_allowed_tools" and isinstance(field_value, str):
+        if field_name in ("mcp_allowed_tools", "dosi_ossie_files") and isinstance(field_value, str):
             return field_value
         return super().prepare_field_value(
             field_name, field, field_value, value_is_complex
@@ -359,6 +359,15 @@ class Settings(BaseSettings):
         default=60.0,
         description="Timeout for DoSI MCP tool calls.",
     )
+    dosi_ossie_files: list[str] = Field(
+        default_factory=lambda: ["*.ossie.yml"],
+        description=(
+            "Glob patterns selecting which OSSIE files under backend/ossie/ are "
+            "included when building the combined DoSI model. Use a comma-separated "
+            "list (or JSON list). Set to e.g. 'debit_card_specializing.ossie.yml' "
+            "if other files use DoSI-unsupported extensions."
+        ),
+    )
 
     # -------- LangSmith --------
     langsmith_tracing: bool = Field(default=False)
@@ -383,14 +392,14 @@ class Settings(BaseSettings):
             file_secret_settings,
         )
 
-    @field_validator("mcp_allowed_tools", mode="before")
+    @field_validator("mcp_allowed_tools", "dosi_ossie_files", mode="before")
     @classmethod
-    def _split_allowed_tools_csv(cls, v):
+    def _split_csv_list(cls, v):
         """Accept both JSON lists and plain CSV strings from .env.
 
-        Without this, ``MCP_ALLOWED_TOOLS=read_query,table_overview`` would
-        raise a pydantic validation error because BaseSettings tries to JSON-
-        decode list values.
+        Without this, ``MCP_ALLOWED_TOOLS=read_query,table_overview`` or
+        ``DOSI_OSSIE_FILES=*.ossie.yml,a.ossie.yml`` would raise a pydantic
+        validation error because BaseSettings tries to JSON-decode list values.
         """
         if isinstance(v, str):
             stripped = v.strip()
