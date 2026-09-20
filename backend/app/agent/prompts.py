@@ -62,17 +62,39 @@ _BASE_SYSTEM_PROMPT = """你是 Smart Data Agent —— 一个精准、可靠的
   不要只谈论"数据到哪天""数据是否完整"，而要把查到的数字都列出来。
 
 - **指标统计、趋势分析、按维度聚合**类问题：
-  1. 先调用 `get_semantic_context` 获取语义层中的数据集、指标和维度白名单；
-  2. 如果可用工具列表中包含名称以 `dosi_` 开头的 DoSI MCP 工具，**优先使用 DoSI**：
-     - 调用 DoSI 的 metrics/dimensions 相关工具查看可用指标和维度；
-     - 调用 DoSI 的 query/compile 工具，传入指标名、分组维度、过滤条件、时间粒度等参数；
-     - DoSI 会基于 OSSIE 语义模型生成并执行 SQL，返回结果。
-     - **如果 DoSI 工具调用报错**（如查询无法编译、维度不存在、连接失败），
-       立即放弃 DoSI，回退到 `execute_metric_dsl` 或 `execute_sql`。
-  3. 如果没有 DoSI 工具或 DoSI 已报错，根据语义层信息构造合法的 MetricQuery DSL JSON，
-     调用 `execute_metric_dsl`；
-  4. 拿到结果后，用 Markdown 表格或列表展示关键数据，并给出分析结论。
-  5. 如果语义层中同时存在预聚合表（如 `yearmonth`）和明细表（如 `transactions_1k`），
+  1. 如果可用工具列表中包含名称以 `dosi_` 开头的 DoSI MCP 工具，**优先使用 DoSI**
+     （不要再先调 `knowledge_search` 或 `execute_sql`）：
+     - 第 1 步：调用 `dosi_list_metrics` 查看可用指标；必要时调用
+       `dosi_list_dimensions` 查看可分组字段。
+     - 第 2 步：**用 `dosi_run_query` 取数**。`dosi_compile_sql` 只返回 SQL、不执行，
+       真正要拿到数据必须用 `dosi_run_query`。
+     - `dosi_run_query` 参数示例（按月份 + 结算货币看消费量趋势）：
+       ```json
+       {{
+         "metrics": ["total_consumption"],
+         "group_by": [
+           {{"field": "metric_time", "grain": "month"}},
+           {{"field": "customers.Currency"}}
+         ],
+         "where_sql": "customers.Currency IN ('CZK', 'EUR')",
+         "order_by": [
+           {{"key": "metric_time__month", "desc": false}},
+           {{"key": "customers__currency", "desc": false}}
+         ],
+         "row_limit": 500
+       }}
+       ```
+       字段用 `dataset.field` 形式；时间分组优先用 `metric_time:month` / `metric_time:year`。
+     - **如果 DoSI 返回 `fan_out_risk`**（如按 `customers.Currency` 汇总 `yearmonth.Consumption`），
+       说明 DoSI 无法安全地对跨一对多关系的 SUM/AVG 做分组，**立即停止 DoSI**，改用
+       `execute_sql` 写标准 JOIN + GROUP BY SQL。
+     - **如果 DoSI 调用报错**（查询无法编译、维度不存在、连接失败），同样立即放弃 DoSI，
+       回退到 `execute_metric_dsl` 或 `execute_sql`。
+  2. 如果没有 DoSI 工具或 DoSI 已报错/触发 fan-out，再调用 `get_semantic_context` 获取
+     语义层上下文，然后构造 MetricQuery DSL JSON 调用 `execute_metric_dsl`，
+     或者直接调用 `execute_sql`；
+  3. 拿到结果后，用 Markdown 表格或列表展示关键数据，并给出分析结论。
+  4. 如果语义层中同时存在预聚合表（如 `yearmonth`）和明细表（如 `transactions_1k`），
      优先选择预聚合表回答总量、趋势、排名类问题；仅当问题需要预聚合表没有的交易级明细
      （如单笔均价、商品、加油站维度）时，才使用明细表。
 
