@@ -18,6 +18,8 @@ from fastapi.responses import JSONResponse
 
 from app.agent.graph import get_compiled_graph
 from app.api import api_router
+from app.api.chat import health as chat_health
+from app.api.schemas import HealthResponse
 from app.config import CheckpointerKind, get_settings
 from app.memory.checkpointer import build_checkpointer, shutdown_checkpointer
 from app.memory.eval_store import init_eval_store
@@ -222,16 +224,10 @@ def create_app() -> FastAPI:
 
     app.include_router(api_router)
 
-    @app.get("/health", tags=["health"])
-    async def health() -> JSONResponse:
-        return JSONResponse(
-            {
-                "status": "ok",
-                "llm_provider": settings.llm_provider.value,
-                "checkpointer": settings.checkpointer.value,
-                "hitl": settings.hitl,
-            }
-        )
+    @app.get("/health", response_model=HealthResponse, tags=["health"])
+    async def health() -> HealthResponse:
+        """Root-level health probe; delegates to the canonical /api/health implementation."""
+        return await chat_health()
 
     @app.get("/", include_in_schema=False)
     async def root() -> JSONResponse:
