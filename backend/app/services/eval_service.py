@@ -17,7 +17,10 @@ from app.memory.eval_store import EvalStore
 from app.query.registry import SemanticRegistry
 from app.services.agent_service import invoke
 from app.tools.knowledge_search import _query as _search_knowledge
-from evaluation.metrics.sql_judges import judge_sql_execution
+from evaluation.metrics.sql_judges import (
+    judge_sql_execution,
+    judge_sql_execution_hybrid,
+)
 from evaluation.metrics.tool_judges import (
     judge_answer_relevance,
     judge_read_file_call,
@@ -94,15 +97,32 @@ def add_case(dataset_name: str, case: dict[str, Any]) -> Path:
 
 
 def _extract_tool_sql(tool_calls: list[dict[str, Any]]) -> str:
-    """Return SQL from an execute_sql tool call, if present."""
+    """Return SQL executed by the agent, regardless of which tool produced it.
+
+    Supports plain ``execute_sql`` as well as DoSI tools that return SQL in
+    their output text (``dosi_compile_sql``, ``dosi_run_query``).
+    """
+    import json as _json
+
     for call in tool_calls:
         name = call.get("name") or ""
-        if name != "execute_sql":
-            continue
         args = call.get("args") or call.get("input") or {}
-        sql = args.get("sql") or args.get("SQL") or ""
-        if isinstance(sql, str):
-            return sql.strip()
+
+        if name == "execute_sql":
+            sql = args.get("sql") or args.get("SQL") or ""
+            if isinstance(sql, str):
+                return sql.strip()
+
+        if name in ("dosi_compile_sql", "dosi_run_query"):
+            output = call.get("output") or ""
+            if isinstance(output, str):
+                try:
+                    payload = _json.loads(output)
+                except Exception:
+                    payload = {}
+                if isinstance(payload, dict) and payload.get("sql"):
+                    return str(payload["sql"]).strip()
+
     return ""
 
 
@@ -209,6 +229,7 @@ def _build_bird_message(
     case: dict[str, Any],
     retrieved_context: str = "",
     ossie_context: str = "",
+    starrocks_target: bool = False,
 ) -> str:
     """Build a prompt that asks the agent to generate SQL for a BIRD case."""
     question = case.get("question", "")
@@ -227,12 +248,32 @@ def _build_bird_message(
     if context_section:
         context_section = "\n\n" + context_section + "\n"
 
+    # Dialect-specific SQL examples. StarRocks does not support SQLite's IIF().
+    if starrocks_target:
+        ratio_example = (
+            "For ratio questions, compute the ratio in a single SELECT expression.\n"
+            "For example, for 'what is the ratio of EUR customers to CZK customers?', use:\n"
+            "  SELECT CAST(SUM(IF(Currency = 'EUR', 1, 0)) AS DOUBLE) / "
+            "SUM(IF(Currency = 'CZK', 1, 0)) AS ratio\n"
+            "  FROM debit_card_specializing.customers;\n"
+            "Do NOT write:\n"
+            "  SELECT Currency, COUNT(*) FROM debit_card_specializing.customers GROUP BY Currency;\n"
+        )
+    else:
+        ratio_example = (
+            "For ratio questions, compute the ratio in a single SELECT expression.\n"
+            "For example, for 'what is the ratio of EUR customers to CZK customers?', use:\n"
+            "  SELECT CAST(SUM(IIF(Currency = 'EUR', 1, 0)) AS FLOAT) / "
+            "SUM(IIF(Currency = 'CZK', 1, 0)) AS ratio\n"
+            "  FROM customers;\n"
+            "Do NOT write:\n"
+            "  SELECT Currency, COUNT(*) FROM customers GROUP BY Currency;\n"
+        )
+
     return (
-        "You are participating in an NL2SQL benchmark evaluation.\n"
-        "Your task is to translate the user's question into a single SQL query.\n"
-        "You must generate the SQL by calling the execute_sql tool.\n"
-        "Even if the execution environment reports an error, the SQL you provided\n"
-        "will be captured and evaluated, so focus on producing a correct query.\n"
+        "You are the Smart Data Agent. Answer the following user question "
+        "using your available tools (DoSI semantic SQL is preferred when applicable).\n"
+        "Focus on producing a correct query and returning the requested data.\n"
         "CRITICAL column rule:\n"
         "- Only return the columns explicitly requested by the question.\n"
         "- Do NOT include helper columns in the final SELECT list, "
@@ -260,17 +301,14 @@ def _build_bird_message(
         "  SELECT c.CustomerID, SUM(y.Consumption) AS total FROM ... "
         "GROUP BY c.CustomerID ORDER BY total ASC LIMIT 1;\n"
         "\n"
-        "For ratio questions, compute the ratio in a single SELECT expression.\n"
-        "For example, for 'what is the ratio of EUR customers to CZK customers?', use:\n"
-        "  SELECT CAST(SUM(IIF(Currency = 'EUR', 1, 0)) AS FLOAT) / "
-        "SUM(IIF(Currency = 'CZK', 1, 0)) AS ratio\n"
-        "  FROM customers;\n"
-        "Do NOT write:\n"
-        "  SELECT Currency, COUNT(*) FROM customers GROUP BY Currency;\n"
+        f"{ratio_example}\n"
+        "\n"
+        "When an OSSIE semantic model is provided above, prefer DoSI semantic SQL "
+        "for metric-style questions (totals, averages, counts, ratios, trends). "
+        "Call dosi_run_query with connection='starrocks' and dialect='starrocks'.\n"
         f"{context_section}\n"
         f"Question: {question}\n\n"
-        "Please generate the SQL by calling the execute_sql tool. "
-        "Do not include explanations, only the SQL."
+        "Provide a concise answer with the requested data."
     )
 
 
@@ -328,6 +366,7 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
             case,
             retrieved_context=retrieved_context,
             ossie_context=ossie_context,
+            starrocks_target=bool(settings.eval_starrocks_database),
         )
         if schema
         else question
@@ -358,8 +397,22 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
         if not generated_sql:
             scores["execution_accuracy"] = {
                 "passed": False,
-                "reason": "Agent did not call execute_sql tool",
+                "reason": "Agent did not produce executable SQL via any tool",
             }
+        elif settings.eval_starrocks_database:
+            # Hybrid mode: gold SQL runs on the original SQLite DB shipped with
+            # the dataset; generated SQL runs on the configured StarRocks DB.
+            passed, reason = await judge_sql_execution_hybrid(
+                gold_sql,
+                generated_sql,
+                db_path=db_path,
+                host=settings.eval_starrocks_host,
+                port=settings.eval_starrocks_port,
+                user=settings.eval_starrocks_user,
+                password=settings.eval_starrocks_password,
+                database=settings.eval_starrocks_database,
+            )
+            scores["execution_accuracy"] = {"passed": passed, "reason": reason}
         else:
             passed, reason = await judge_sql_execution(gold_sql, generated_sql, db_path)
             scores["execution_accuracy"] = {"passed": passed, "reason": reason}

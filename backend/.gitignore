@@ -24,6 +24,9 @@ build/
 # Data / runtime
 data/*.db
 data/*.db-*
+data/chroma/
+data/dosi-model.yaml
+data/models/
 data/knowledge/*.bin
 logs/
 *.log

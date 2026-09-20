@@ -164,6 +164,15 @@ class Settings(BaseSettings):
         description="Number of semantic-layer snippets to retrieve for each BIRD case.",
     )
 
+    # -------- Evaluation StarRocks target --------
+    # When set, BIRD-SQL evaluation executes gold/generated SQL against this
+    # StarRocks database instead of the SQLite db_path shipped with the dataset.
+    eval_starrocks_host: str = Field(default="127.0.0.1")
+    eval_starrocks_port: int = Field(default=9030)
+    eval_starrocks_user: str = Field(default="root")
+    eval_starrocks_password: str = Field(default="")
+    eval_starrocks_database: str = Field(default="")
+
     # -------- Vector Store / Semantic Retrieval --------
     vector_store_enabled: bool = Field(
         default=True,
