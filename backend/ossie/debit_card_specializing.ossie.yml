@@ -1,6 +1,6 @@
 semantic_model:
   - name: debit_card_specializing
-    display_name: 燃料卡 B2B 语义模型
+    # display_name: 燃料卡 B2B 语义模型
     description: |
       加油站/燃料卡 B2B 业务语义模型，覆盖客户、加油站网点、商品、客户月度消费汇总
       以及抽样交易明细。本模型提供表结构、join 关系与通用业务含义，用于支撑 NL2SQL 生成。

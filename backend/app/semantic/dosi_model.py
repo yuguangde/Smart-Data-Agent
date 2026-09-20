@@ -88,16 +88,34 @@ def _split_table_column(value: Any) -> tuple[str, list[str]]:
 
 
 def _clean_relationship(rel: dict[str, Any]) -> dict[str, Any]:
-    """Normalise a relationship so DoSI's parser accepts it."""
-    cleaned = {k: v for k, v in rel.items() if k in _SUPPORTED_REL_FIELDS}
+    """Normalise a relationship so DoSI's parser accepts it.
 
-    if "from" in cleaned:
-        table, cols = _split_table_column(cleaned["from"])
+    DoSI expects ``from`` to be the many-side dataset (fact) and ``to`` the
+    one-side dataset (dimension). Our OSSIE files write ``type: one_to_many``
+    from dimension to fact, so we flip the direction when converting.
+    """
+    cleaned = {k: v for k, v in rel.items() if k in _SUPPORTED_REL_FIELDS}
+    rel_type = str(rel.get("type", "")).lower()
+
+    raw_from = cleaned.get("from")
+    raw_to = cleaned.get("to")
+
+    # Project convention when type is absent: from=one side (dimension),
+    # to=many side (fact). DoSI convention: from=many side, to=one side.
+    if rel_type in ("", "one_to_many"):
+        raw_from, raw_to = raw_to, raw_from
+    elif rel_type == "many_to_one":
+        # Already many -> one; keep as-is.
+        pass
+    # For one_to_one keep the original order.
+
+    if raw_from is not None:
+        table, cols = _split_table_column(raw_from)
         cleaned["from"] = table
         if "from_columns" not in cleaned:
             cleaned["from_columns"] = cols
-    if "to" in cleaned:
-        table, cols = _split_table_column(cleaned["to"])
+    if raw_to is not None:
+        table, cols = _split_table_column(raw_to)
         cleaned["to"] = table
         if "to_columns" not in cleaned:
             cleaned["to_columns"] = cols
