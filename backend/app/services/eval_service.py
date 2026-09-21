@@ -12,10 +12,12 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
+from app.agent.prompts import build_system_prompt
 from app.config import get_settings
 from app.memory.eval_store import EvalStore
 from app.query.registry import SemanticRegistry
 from app.services.agent_service import invoke
+from app.tools import get_llm_tools
 from app.tools.knowledge_search import _query as _search_knowledge
 from evaluation.metrics.sql_judges import (
     judge_sql_execution,
@@ -360,6 +362,11 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
         if schema
         else question
     )
+
+    # Build the full prompt as seen by the agent LLM so it can be inspected later.
+    system_prompt = build_system_prompt(get_llm_tools())
+    full_prompt = f"{system_prompt}\n\n{user_message}"
+
     result = await invoke(user_message=user_message, user_id="eval")
 
     # Auto-approve HITL pauses so the runner can observe tool execution.
@@ -412,6 +419,7 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
             "generated_sql": generated_sql,
             "gold_sql": gold_sql,
             "user_message": user_message,
+            "full_prompt": full_prompt,
             "retrieved_context": retrieved_context,
             "tool_calls": tool_calls,
             "scores": scores,
@@ -521,6 +529,7 @@ async def run_eval(
                 generated_sql=result.get("generated_sql"),
                 gold_sql=result.get("gold_sql"),
                 user_message=result.get("user_message"),
+                full_prompt=result.get("full_prompt"),
                 retrieved_context=result.get("retrieved_context"),
                 thread_id=result.get("thread_id"),
                 error=None,
@@ -538,6 +547,7 @@ async def run_eval(
                 answer="",
                 generated_sql=None,
                 gold_sql=None,
+                full_prompt=None,
                 error=str(exc),
             )
 

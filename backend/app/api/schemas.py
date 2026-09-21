@@ -194,6 +194,10 @@ class EvalCaseResult(BaseModel):
         default=None,
         description="The final user prompt sent to the agent for this case.",
     )
+    full_prompt: str | None = Field(
+        default=None,
+        description="System prompt plus user_message as seen by the agent LLM.",
+    )
     retrieved_context: str | None = Field(
         default=None,
         description="Semantic-layer snippets retrieved before prompt construction.",

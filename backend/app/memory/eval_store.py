@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS eval_results (
     generated_sql     TEXT,
     gold_sql          TEXT,
     user_message      TEXT,
+    full_prompt       TEXT,
     retrieved_context TEXT,
     thread_id         TEXT,
     error             TEXT,
@@ -58,6 +59,7 @@ _MIGRATE_RESULTS_SQL = """
 ALTER TABLE eval_results ADD COLUMN generated_sql TEXT;
 ALTER TABLE eval_results ADD COLUMN gold_sql TEXT;
 ALTER TABLE eval_results ADD COLUMN user_message TEXT;
+ALTER TABLE eval_results ADD COLUMN full_prompt TEXT;
 ALTER TABLE eval_results ADD COLUMN retrieved_context TEXT;
 ALTER TABLE eval_results ADD COLUMN thread_id TEXT;
 """
@@ -173,6 +175,7 @@ class EvalStore:
         generated_sql: str | None = None,
         gold_sql: str | None = None,
         user_message: str | None = None,
+        full_prompt: str | None = None,
         retrieved_context: str | None = None,
         thread_id: str | None = None,
         error: str | None = None,
@@ -184,9 +187,9 @@ class EvalStore:
             await db.execute(
                 "INSERT INTO eval_results "
                 "(result_id, run_id, case_index, question, passed, scores, answer, "
-                "generated_sql, gold_sql, user_message, retrieved_context, thread_id, "
+                "generated_sql, gold_sql, user_message, full_prompt, retrieved_context, thread_id, "
                 "error, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     result_id,
                     run_id,
@@ -198,6 +201,7 @@ class EvalStore:
                     generated_sql,
                     gold_sql,
                     user_message,
+                    full_prompt,
                     retrieved_context,
                     thread_id,
                     error,
@@ -277,7 +281,7 @@ class EvalStore:
         async with aiosqlite.connect(self._db_path) as db:
             async with db.execute(
                 "SELECT result_id, run_id, case_index, question, passed, scores, answer, "
-                "generated_sql, gold_sql, user_message, retrieved_context, thread_id, "
+                "generated_sql, gold_sql, user_message, full_prompt, retrieved_context, thread_id, "
                 "error, created_at FROM eval_results "
                 "WHERE run_id = ? ORDER BY case_index",
                 (run_id,),
@@ -295,10 +299,11 @@ class EvalStore:
                 "generated_sql": row[7],
                 "gold_sql": row[8],
                 "user_message": row[9],
-                "retrieved_context": row[10],
-                "thread_id": row[11],
-                "error": row[12],
-                "created_at": row[13],
+                "full_prompt": row[10],
+                "retrieved_context": row[11],
+                "thread_id": row[12],
+                "error": row[13],
+                "created_at": row[14],
             }
             for row in rows
         ]
