@@ -20,7 +20,9 @@ import {
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 
+import { fetchHistory } from "@/api/chat";
 import { fetchEvalRun } from "@/api/eval";
+import type { ThreadHistoryResponse } from "@/types/chat";
 import type { EvalCaseResult, EvalRunDetail } from "@/types/eval";
 
 const { Text, Title } = Typography;
@@ -30,6 +32,8 @@ export default function EvalRunDetailPage() {
   const [run, setRun] = useState<EvalRunDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<EvalCaseResult | null>(null);
+  const [history, setHistory] = useState<ThreadHistoryResponse | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   const load = async () => {
     if (!runId) return;
@@ -42,6 +46,27 @@ export default function EvalRunDetailPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const openProcess = async (record: EvalCaseResult) => {
+    setSelected(record);
+    setHistory(null);
+    if (record.thread_id) {
+      setHistoryLoading(true);
+      try {
+        const h = await fetchHistory(record.thread_id);
+        setHistory(h);
+      } catch (err) {
+        message.error("加载过程记录失败");
+      } finally {
+        setHistoryLoading(false);
+      }
+    }
+  };
+
+  const closeProcess = () => {
+    setSelected(null);
+    setHistory(null);
   };
 
   useEffect(() => {
@@ -252,12 +277,12 @@ export default function EvalRunDetailPage() {
               ),
             },
             {
-              title: "提示词",
-              key: "prompt",
-              width: 100,
+              title: "过程",
+              key: "process",
+              width: 110,
               render: (_: unknown, record: EvalCaseResult) => (
-                <Button size="small" onClick={() => setSelected(record)}>
-                  查看 Prompt
+                <Button size="small" onClick={() => openProcess(record)}>
+                  查看过程
                 </Button>
               ),
             },
@@ -266,9 +291,9 @@ export default function EvalRunDetailPage() {
       </Card>
 
       <Modal
-        title={`Case #${selected?.case_index ?? ""} — 最终提示词与检索上下文`}
+        title={`Case #${selected?.case_index ?? ""} — 生成过程`}
         open={!!selected}
-        onCancel={() => setSelected(null)}
+        onCancel={closeProcess}
         footer={null}
         width={900}
       >
@@ -293,45 +318,84 @@ export default function EvalRunDetailPage() {
               </div>
             )}
 
-            {selected.retrieved_context && (
-              <div>
-                <Text strong>检索到的语义层片段（retrieved_context）</Text>
-                <pre
-                  style={{
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word",
-                    background: "#fffbe6",
-                    padding: 8,
-                    borderRadius: 4,
-                    maxHeight: 240,
-                    overflow: "auto",
-                  }}
-                >
-                  {selected.retrieved_context}
-                </pre>
-              </div>
-            )}
-
-            {selected.user_message ? (
-              <div>
-                <Text strong>最终 user_message（Agent 实际收到的 prompt）</Text>
-                <pre
-                  style={{
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word",
-                    background: "#e6f4ff",
-                    padding: 8,
-                    borderRadius: 4,
-                    maxHeight: 480,
-                    overflow: "auto",
-                  }}
-                >
-                  {selected.user_message}
-                </pre>
-              </div>
-            ) : (
-              <Alert message="该 case 没有保存 prompt（可能是旧 run 或未启用评测持久化）" type="info" showIcon />
-            )}
+            <Spin spinning={historyLoading}>
+              {history ? (
+                <Space direction="vertical" style={{ width: "100%" }}>
+                  {history.messages.map((msg, idx) => (
+                    <div key={idx} style={{ width: "100%" }}>
+                      <Tag color={msg.role === "user" ? "blue" : msg.role === "assistant" ? "purple" : "default"}>
+                        {msg.role === "user" ? "用户" : msg.role === "assistant" ? "模型" : msg.role}
+                      </Tag>
+                      {msg.content && (
+                        <pre
+                          style={{
+                            whiteSpace: "pre-wrap",
+                            wordBreak: "break-word",
+                            background: msg.role === "user" ? "#e6f4ff" : "#f6ffed",
+                            padding: 8,
+                            borderRadius: 4,
+                            marginTop: 4,
+                            maxHeight: 360,
+                            overflow: "auto",
+                          }}
+                        >
+                          {msg.content}
+                        </pre>
+                      )}
+                      {msg.tool_calls && msg.tool_calls.length > 0 && (
+                        <div style={{ marginTop: 4 }}>
+                          {msg.tool_calls.map((tc: any, tidx: number) => (
+                            <Card
+                              key={tidx}
+                              size="small"
+                              title={`工具调用: ${tc.name || ""}`}
+                              style={{ marginBottom: 4, background: "#fffbe6" }}
+                            >
+                              <div>
+                                <Text strong>输入参数：</Text>
+                                <pre
+                                  style={{
+                                    whiteSpace: "pre-wrap",
+                                    wordBreak: "break-word",
+                                    background: "#fff",
+                                    padding: 8,
+                                    borderRadius: 4,
+                                  }}
+                                >
+                                  {tc.input ? JSON.stringify(tc.input, null, 2) : ""}
+                                </pre>
+                              </div>
+                              {tc.output && (
+                                <div style={{ marginTop: 8 }}>
+                                  <Text strong>返回结果：</Text>
+                                  <pre
+                                    style={{
+                                      whiteSpace: "pre-wrap",
+                                      wordBreak: "break-word",
+                                      background: "#fff",
+                                      padding: 8,
+                                      borderRadius: 4,
+                                      maxHeight: 240,
+                                      overflow: "auto",
+                                    }}
+                                  >
+                                    {typeof tc.output === "string" ? tc.output : JSON.stringify(tc.output, null, 2)}
+                                  </pre>
+                                </div>
+                              )}
+                            </Card>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </Space>
+              ) : selected.thread_id ? (
+                <Alert message="正在加载对话过程..." type="info" showIcon />
+              ) : (
+                <Alert message="该 case 没有保存 thread_id，无法回放生成过程" type="warning" showIcon />
+              )}
+            </Spin>
           </Space>
         )}
       </Modal>
