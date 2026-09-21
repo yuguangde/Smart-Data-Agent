@@ -15,10 +15,8 @@ from typing import Any, Callable
 from app.agent.prompts import build_system_prompt
 from app.config import get_settings
 from app.memory.eval_store import EvalStore
-from app.query.registry import SemanticRegistry
 from app.services.agent_service import get_thread_transcript, invoke
 from app.tools import get_llm_tools
-from app.tools.knowledge_search import _query as _search_knowledge
 from evaluation.metrics.sql_judges import (
     judge_sql_execution,
     judge_sql_execution_hybrid,
@@ -128,135 +126,16 @@ def _extract_tool_sql(tool_calls: list[dict[str, Any]]) -> str:
     return ""
 
 
-def _build_ossie_context(db_name: str) -> str:
-    """Return a plain-text summary of the OSSIE semantic model for ``db_name``.
-
-    The semantic registry is scanned at server startup, so this lookup is cheap
-    and deterministic.  If no model matches the database name, an empty string is
-    returned and the prompt falls back to the raw schema.
-    """
-    registry = SemanticRegistry.get()
-    model = registry.models.get(db_name)
-    if model is None:
-        return ""
-
-    lines = [f"Semantic model: {model.name}"]
-    if model.description:
-        lines.append(model.description.strip())
-
-    # Model-level relationships / join paths.
-    relationships = model.raw.get("relationships") or []
-    if relationships:
-        lines.append("\nJoin relationships:")
-        for rel in relationships:
-            lines.append(
-                f"  - {rel.get('from')} -> {rel.get('to')} "
-                f"({rel.get('type', 'n-to-m')}): {rel.get('description', '')}"
-            )
-
-    # Model-level business rules / caveats.
-    rules = model.raw.get("business_rules") or []
-    if rules:
-        lines.append("\nImportant business rules:")
-        for idx, rule in enumerate(rules, start=1):
-            lines.append(f"  {idx}. {rule}")
-
-    # Example SQL patterns.
-    patterns = model.raw.get("sql_patterns") or []
-    if patterns:
-        lines.append("\nTypical correct SQL patterns:")
-        for pat in patterns:
-            sql = (pat.get("sql") or "").strip()
-            if sql:
-                indented_sql = "\n".join("      " + line for line in sql.splitlines())
-                lines.append(f"  - {pat.get('name', 'Example')}:")
-                lines.append(indented_sql)
-
-    # Per-dataset details.
-    if model.datasets:
-        lines.append("\nDatasets (tables), columns, keys and metrics:")
-
-    for ds in model.datasets:
-        lines.append(f"\n- Table: {ds.source}")
-        raw = ds.raw or {}
-
-        agg = raw.get("aggregation_level")
-        if agg:
-            lines.append(f"  Aggregation level: {agg}")
-        preferred = raw.get("preferred_for")
-        if preferred:
-            lines.append(f"  Preferred for: {', '.join(preferred)}")
-
-        ds_description = raw.get("description") or ""
-        if ds_description:
-            lines.append(f"  Description:\n    {ds_description.strip()}")
-
-        primary_key = raw.get("primary_key") or []
-        if primary_key:
-            lines.append(f"  Primary key: {', '.join(primary_key)}")
-
-        for fk in raw.get("foreign_keys") or []:
-            lines.append(
-                f"  Foreign key: {fk.get('column')} -> {fk.get('references')}"
-            )
-
-        for note in raw.get("notes") or []:
-            lines.append(f"  Note: {note}")
-
-        dim_names = sorted(ds.dimension_names)
-        if dim_names:
-            lines.append(f"  Columns: {', '.join(dim_names)}")
-            for dim in ds.dimensions:
-                if dim.description:
-                    lines.append(f"    * {dim.name}: {dim.description.strip()}")
-
-        metric_names = sorted(ds.metric_names)
-        if metric_names:
-            lines.append(f"  Metrics: {', '.join(metric_names)}")
-            for metric in ds.metrics:
-                if metric.description:
-                    lines.append(f"    * {metric.name}: {metric.description.strip()}")
-                ai_context = metric.raw.get("ai_context") or {}
-                instructions = ai_context.get("instructions")
-                if instructions:
-                    lines.append(f"      [使用提示] {instructions.strip()}")
-                synonyms = ai_context.get("synonyms") or []
-                if synonyms:
-                    lines.append(f"      [同义词/别名] {', '.join(synonyms)}")
-
-    return "\n".join(lines)
-
-
-def _build_bird_message(
-    case: dict[str, Any],
-    retrieved_context: str = "",
-    ossie_context: str = "",
-) -> str:
+def _build_bird_message(case: dict[str, Any]) -> str:
     """Build a minimal prompt that asks the agent to generate SQL for a BIRD case.
 
     All general behaviour rules (DoSI preference, column rules, single-answer
-    LIMIT 1, etc.) live in the base system prompt so the evaluation prompt
-    only provides the task framing and dataset-specific context.
+    LIMIT 1, etc.) live in the base system prompt. The evaluation prompt only
+    contains the task instruction and the question.
     """
     question = case.get("question", "")
-    sections: list[str] = []
-    if retrieved_context:
-        sections.append(
-            "Additional semantic guidance (retrieved from knowledge base):\n"
-            f"{retrieved_context}"
-        )
-    if ossie_context:
-        sections.append(
-            "OSSIE semantic model guidance (business definitions and metrics):\n"
-            f"{ossie_context}"
-        )
-    context_section = "\n\n".join(sections)
-    if context_section:
-        context_section = "\n\n" + context_section + "\n"
-
     return (
         "请为下面的问题生成 SQL 并执行查询，返回查询结果。\n"
-        f"{context_section}\n"
         f"问题：{question}"
     )
 
@@ -281,41 +160,9 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
     db_path = case.get("db_path")
 
     settings = get_settings()
-    db_name = Path(db_path).stem if db_path else ""
-
-    # If an OSSIE semantic model exists for this DB, use it as the authoritative
-    # semantic layer and skip the legacy markdown retrieval for that DB.
-    ossie_context = _build_ossie_context(db_name) if db_name else ""
-
-    retrieved_context = ""
-    if (
-        schema
-        and db_path
-        and settings.eval_retrieval_enabled
-        and not ossie_context
-    ):
-        # Use only the natural-language question for semantic retrieval.
-        # The full schema contains many repeated table names and tends to drown
-        # out the field-specific / value-normalization sections we actually need.
-        query = question
-        # Pick the semantic-layer file that matches the current DB so we do not
-        # mix debit_card and student_club guidance.
-        filename_filter = f"bird-semantic-layer-{db_name}.md"
-        # _search_knowledge may run a local embedding model; run it in a worker
-        # thread so the async event loop stays responsive.
-        retrieved_context = await asyncio.to_thread(
-            _search_knowledge,
-            query,
-            settings.eval_retrieval_top_k,
-            filename_filter=filename_filter,
-        )
 
     user_message = (
-        _build_bird_message(
-            case,
-            retrieved_context=retrieved_context,
-            ossie_context=ossie_context,
-        )
+        _build_bird_message(case)
         if schema
         else question
     )
@@ -387,7 +234,7 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
             "user_message": user_message,
             "full_prompt": full_prompt,
             "trajectory": json.dumps(trajectory, ensure_ascii=False, default=str),
-            "retrieved_context": retrieved_context,
+            "retrieved_context": "",
             "tool_calls": tool_calls,
             "scores": scores,
         }
@@ -408,7 +255,7 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
         "user_message": user_message,
         "full_prompt": full_prompt,
         "trajectory": json.dumps(trajectory, ensure_ascii=False, default=str),
-        "retrieved_context": retrieved_context,
+        "retrieved_context": "",
         "tool_calls": tool_calls,
         "scores": scores,
     }
