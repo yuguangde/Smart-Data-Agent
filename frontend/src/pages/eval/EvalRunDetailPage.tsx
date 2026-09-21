@@ -299,6 +299,25 @@ export default function EvalRunDetailPage() {
       >
         {selected && (
           <Space direction="vertical" style={{ width: "100%" }}>
+            {selected.full_prompt && (
+              <div>
+                <Text strong>完整提示词（系统提示词 + 评测专用 prompt）</Text>
+                <pre
+                  style={{
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    background: "#e6f4ff",
+                    padding: 8,
+                    borderRadius: 4,
+                    maxHeight: 360,
+                    overflow: "auto",
+                  }}
+                >
+                  {selected.full_prompt}
+                </pre>
+              </div>
+            )}
+
             {selected.thread_id && (
               <div>
                 <Text strong>Thread ID</Text>

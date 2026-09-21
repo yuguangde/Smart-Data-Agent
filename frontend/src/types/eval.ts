@@ -51,6 +51,8 @@ export interface EvalCaseResult {
   gold_sql: string | null;
   /** The final user prompt sent to the agent for this case. */
   user_message: string | null;
+  /** System prompt plus user_message as seen by the agent LLM. */
+  full_prompt: string | null;
   /** Semantic-layer snippets retrieved before prompt construction. */
   retrieved_context: string | null;
   /** Agent thread id, which can be used to replay the full trajectory. */
