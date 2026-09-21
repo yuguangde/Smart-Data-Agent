@@ -11,8 +11,10 @@ import logging
 import shutil
 from typing import Any
 
+from pathlib import Path
+
 from app.agent.graph import get_compiled_graph
-from app.config import get_settings
+from app.config import BASE_DIR, get_settings
 from app.memory.checkpointer import build_checkpointer, shutdown_checkpointer
 from app.semantic.dosi_model import build_dosi_model
 from app.tools.mcp_loader import init_mcp_tools, shutdown_mcp
@@ -28,7 +30,10 @@ def _settings_attr(settings: Any, name: str, default: Any) -> Any:
     return getattr(settings, name, default)
 
 
-async def _start_dosi_server(settings: Any) -> asyncio.subprocess.Process | None:
+async def _start_dosi_server(
+    settings: Any,
+    model_path: Path | str | None = None,
+) -> asyncio.subprocess.Process | None:
     """Start the DoSI MCP server as a local subprocess.
 
     Returns the subprocess handle, or ``None`` if the binary is missing.
@@ -50,14 +55,16 @@ async def _start_dosi_server(settings: Any) -> asyncio.subprocess.Process | None
         f"{_settings_attr(settings, 'dosi_server_listen_host', '127.0.0.1')}:"
         f"{_settings_attr(settings, 'dosi_server_listen_port', 8080)}"
     )
-    model_path = str(_settings_attr(settings, "dosi_model_path", "./data/dosi-model.yaml"))
+    if model_path is None:
+        model_path = Path(_settings_attr(settings, "dosi_model_path", "./data/dosi-model.yaml"))
+    model_path_str = str(model_path)
     transport = _settings_attr(settings, "dosi_mcp_transport", "streamable_http")
     transport_value = transport.value if hasattr(transport, "value") else str(transport)
 
     cmd = [
         bin_path,
         "--model",
-        model_path,
+        model_path_str,
         "--bind",
         bind,
     ]
@@ -110,16 +117,30 @@ async def bootstrap_agent(*, enable_mcp: bool = True) -> None:
     await build_checkpointer(settings)
 
     if enable_mcp:
-        # Prepare the combined DoSI model file when DoSI MCP is enabled.
+        # Prepare the DoSI model entrypoint. If only one ossie file is configured,
+        # use it directly to keep setup simple; otherwise merge all configured
+        # ossie files into the combined model expected by DoSI.
         if settings.dosi_mcp_enabled:
-            try:
-                build_dosi_model()
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.warning("Failed to build DoSI model file: %s", exc)
+            ossie_dir = BASE_DIR / "ossie"
+            ossie_patterns = list(_settings_attr(settings, "dosi_ossie_files", [])) or ["*.ossie.yml"]
+            ossie_files: list[Path] = []
+            for pattern in ossie_patterns:
+                ossie_files.extend(ossie_dir.glob(pattern))
+            ossie_files = sorted(set(ossie_files))
+
+            model_path: Path | str | None = None
+            if len(ossie_files) == 1:
+                model_path = ossie_files[0]
+                logger.info("Using single ossie file as DoSI model: %s", model_path)
+            else:
+                try:
+                    build_dosi_model()
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.warning("Failed to build DoSI model file: %s", exc)
 
             if settings.dosi_start_server:
                 global _dosi_proc
-                _dosi_proc = await _start_dosi_server(settings)
+                _dosi_proc = await _start_dosi_server(settings, model_path=model_path)
                 if _dosi_proc is not None:
                     # Give dosi-server a moment to bind before MCP connect.
                     await asyncio.sleep(0.5)
