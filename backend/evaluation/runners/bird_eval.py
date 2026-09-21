@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from app.agent.prompts import build_system_prompt
+from app.bootstrap import bootstrap_agent, shutdown_agent
+from app.config import get_settings
 from app.services.agent_service import invoke
 from app.tools import get_llm_tools
 from evaluation.metrics.sql_judges import judge_sql_execution
@@ -179,6 +181,21 @@ async def run_eval(
     )
 
 
+async def _main(args: argparse.Namespace) -> int:
+    """Bootstrap the agent, run the evaluation, and tear down."""
+    if args.no_mcp:
+        settings = get_settings()
+        settings.mcp_enabled = False
+        settings.dosi_mcp_enabled = False
+
+    await bootstrap_agent(enable_mcp=not args.no_mcp)
+    try:
+        await run_eval(args.dataset, args.output, args.max_concurrent)
+        return 0
+    finally:
+        await shutdown_agent()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Evaluate DataAgent on BIRD-SQL")
     parser.add_argument(
@@ -201,10 +218,14 @@ def main() -> int:
         default=3,
         help="Maximum concurrent agent invocations (default: 3)",
     )
+    parser.add_argument(
+        "--no-mcp",
+        action="store_true",
+        help="Disable MCP tools and use only built-in tools",
+    )
     args = parser.parse_args()
 
-    asyncio.run(run_eval(args.dataset, args.output, args.max_concurrent))
-    return 0
+    return asyncio.run(_main(args))
 
 
 if __name__ == "__main__":

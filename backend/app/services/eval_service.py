@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app.agent.prompts import build_system_prompt
+from app.bootstrap import ensure_agent_bootstrapped
 from app.config import get_settings
 from app.memory.eval_store import EvalStore
 from app.services.agent_service import get_thread_transcript, invoke
@@ -162,6 +163,11 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
     If the agent pauses for HITL approval, the runner automatically approves
     the pending tool call so that tool-execution correctness can be measured.
     """
+    # Ensure the agent graph is compiled with the same toolset as the running
+    # application (built-in + MCP). In the uvicorn process this is a no-op after
+    # lifespan bootstrap; in standalone scripts it performs the bootstrap.
+    await ensure_agent_bootstrapped()
+
     question = case["question"]
     expected_tool = case.get("expected_tool")
     expected_args = case.get("expected_args", {})
@@ -293,6 +299,10 @@ async def run_eval(
     This function is designed to be run as a background task. It updates the
     run row as it progresses and marks it completed/failed at the end.
     """
+    # Bootstrapping early avoids redundant work when run_eval is followed by
+    # concurrent run_case calls, and ensures standalone callers also get MCP tools.
+    await ensure_agent_bootstrapped()
+
     try:
         cases = load_jsonl(dataset_path)
     except Exception as exc:
