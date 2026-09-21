@@ -337,7 +337,7 @@ def make_agent_node():
     # invocations under a shared session.
     raw_tool_node = build_tool_node(tools)
     marshal_node = make_marshal_node()
-    system_prompt = build_system_prompt(tools)
+    default_system_prompt = build_system_prompt(tools)
 
     async def agent_node(
         state: AgentState,
@@ -347,6 +347,9 @@ def make_agent_node():
         settings = get_settings()
         iterations = state.get("iterations", 0)
         is_last_turn = iterations + 1 >= settings.max_iterations
+        # Use the caller-provided system prompt when present; otherwise fall back
+        # to the default prompt built from the current tool list.
+        system_prompt = state.get("system_prompt") or default_system_prompt
         # On the last allowed iteration, bind no tools and tell the model to
         # answer directly, preventing unfulfilled tool_calls at graph end.
         current_chat = chat_final if is_last_turn else chat

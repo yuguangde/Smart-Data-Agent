@@ -20,16 +20,17 @@ import sys
 from pathlib import Path
 from typing import Any, TextIO
 
+from app.agent.prompts import build_system_prompt
 from app.services.agent_service import invoke
+from app.tools import get_llm_tools
 from evaluation.metrics.sql_judges import judge_sql_execution
 
 
-SYSTEM_PREFIX = """You are participating in an NL2SQL benchmark evaluation.
-Your task is to translate the user's question into a single SQL query.
+SYSTEM_PREFIX = """你正在参与 BIRD-SQL 评测。
+你的任务是把用户的问题翻译成一个 SQL 查询。
 
-You must generate the SQL by calling the `execute_sql` tool.
-Even if the execution environment reports an error, the SQL you provided will
-be captured and evaluated, so focus on producing a correct SQLite query.
+你必须通过调用 `execute_sql` 工具来生成 SQL。
+即使执行环境报错，你提供的 SQL 也会被捕获并评分，所以请专注于写出正确的 SQLite 查询。
 """
 
 
@@ -59,11 +60,7 @@ def _extract_generated_sql(result: dict[str, Any]) -> str:
 
 
 def _build_user_message(case: dict[str, Any]) -> str:
-    return (
-        f"Question: {case['question']}\n\n"
-        "Please generate the SQL by calling the execute_sql tool. "
-        "Do not include explanations, only the SQL."
-    )
+    return f"问题：{case['question']}"
 
 
 async def run_case(case: dict[str, Any]) -> dict[str, Any]:
@@ -74,10 +71,15 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
 
     user_message = _build_user_message(case)
 
-    # Combine system prompt and user message for the agent.
-    full_message = f"{SYSTEM_PREFIX}\n\n{user_message}"
+    # Compose the full evaluation system prompt: base rules first, then the
+    # BIRD-specific task instruction, so both runners behave consistently.
+    system_prompt = f"{build_system_prompt(get_llm_tools())}\n\n{SYSTEM_PREFIX}"
 
-    result = await invoke(user_message=full_message, user_id="bird_eval")
+    result = await invoke(
+        user_message=user_message,
+        user_id="bird_eval",
+        system_prompt=system_prompt,
+    )
     generated_sql = _extract_generated_sql(result)
 
     if not generated_sql:

@@ -17,6 +17,7 @@ from app.config import get_settings
 from app.memory.eval_store import EvalStore
 from app.services.agent_service import get_thread_transcript, invoke
 from app.tools import get_llm_tools
+from langchain_core.tools import BaseTool
 from evaluation.metrics.sql_judges import (
     judge_sql_execution,
     judge_sql_execution_hybrid,
@@ -126,18 +127,27 @@ def _extract_tool_sql(tool_calls: list[dict[str, Any]]) -> str:
     return ""
 
 
-def _build_bird_message(case: dict[str, Any]) -> str:
-    """Build a minimal prompt that asks the agent to generate SQL for a BIRD case.
+_BIRD_EVAL_INSTRUCTION = "你正在参与 BIRD-SQL 评测。请为下面的问题生成 SQL 并执行查询，返回查询结果。"
 
-    All general behaviour rules (DoSI preference, column rules, single-answer
-    LIMIT 1, etc.) live in the base system prompt. The evaluation prompt only
-    contains the task instruction and the question.
+
+def _build_bird_system_prompt(tools: list[BaseTool]) -> str:
+    """Build the system prompt for BIRD evaluation runs.
+
+    The base system prompt already contains general behaviour rules (DoSI
+    preference, column rules, single-answer LIMIT 1, etc.). This appends the
+    BIRD task instruction after it so the model sees the evaluation context.
+    """
+    return f"{build_system_prompt(tools)}\n\n{_BIRD_EVAL_INSTRUCTION}"
+
+
+def _build_bird_message(case: dict[str, Any]) -> str:
+    """Build a minimal user message that only contains the BIRD question.
+
+    The SQL-generation task instruction lives in the system prompt, not here.
     """
     question = case.get("question", "")
-    return (
-        "请为下面的问题生成 SQL 并执行查询，返回查询结果。\n"
-        f"问题：{question}"
-    )
+    return f"问题：{question}"
+
 
 
 async def run_case(case: dict[str, Any]) -> dict[str, Any]:
@@ -161,17 +171,21 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
 
     settings = get_settings()
 
-    user_message = (
-        _build_bird_message(case)
-        if schema
-        else question
-    )
+    if schema:
+        system_prompt = _build_bird_system_prompt(get_llm_tools())
+        user_message = _build_bird_message(case)
+    else:
+        system_prompt = build_system_prompt(get_llm_tools())
+        user_message = question
 
     # Build the full prompt as seen by the agent LLM so it can be inspected later.
-    system_prompt = build_system_prompt(get_llm_tools())
     full_prompt = f"{system_prompt}\n\n{user_message}"
 
-    result = await invoke(user_message=user_message, user_id="eval")
+    result = await invoke(
+        user_message=user_message,
+        user_id="eval",
+        system_prompt=system_prompt,
+    )
 
     # Auto-approve HITL pauses so the runner can observe tool execution.
     max_approvals = 8

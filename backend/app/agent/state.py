@@ -19,6 +19,7 @@ class AgentState(MessagesState):
     metadata: dict[str, Any] = {}
     iterations: int = 0
     final_answer: str = ""
+    system_prompt: str | None = None
 
     # Data-pipeline fields (program-driven SQL generation & execution)
     is_data_question: bool | None = None

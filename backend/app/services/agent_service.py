@@ -223,6 +223,7 @@ def make_initial_state(
     user_message: str,
     user_id: str,
     metadata: dict[str, Any],
+    system_prompt: str | None = None,
 ) -> AgentState:
     """Build the input dict expected by LangGraph for a new turn."""
     return {
@@ -235,6 +236,7 @@ def make_initial_state(
         "user_id": user_id,
         "metadata": metadata,
         "iterations": 0,
+        "system_prompt": system_prompt,
     }
 
 
@@ -247,6 +249,7 @@ async def invoke(
     user_id: str = "anonymous",
     metadata: dict[str, Any] | None = None,
     resume: dict[str, Any] | None = None,
+    system_prompt: str | None = None,
 ) -> dict[str, Any]:
     """Run the agent once and return a JSON-friendly reply.
 
@@ -258,7 +261,9 @@ async def invoke(
     config = {"configurable": {"thread_id": thread_id, "user_id": user_id}}
 
     if resume is None:
-        input_value = make_initial_state(user_message, user_id, metadata or {})
+        input_value = make_initial_state(
+            user_message, user_id, metadata or {}, system_prompt=system_prompt
+        )
     else:
         input_value = Command(resume=resume)
 
@@ -294,6 +299,7 @@ async def stream_events(
     user_id: str = "anonymous",
     metadata: dict[str, Any] | None = None,
     resume: dict[str, Any] | None = None,
+    system_prompt: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Yield SSE-friendly events describing the agent run.
 
@@ -307,7 +313,9 @@ async def stream_events(
     config = {"configurable": {"thread_id": thread_id, "user_id": user_id}}
 
     if resume is None:
-        input_value = make_initial_state(user_message or "", user_id, metadata or {})
+        input_value = make_initial_state(
+            user_message or "", user_id, metadata or {}, system_prompt=system_prompt
+        )
         yield {"event": "message", "data": {"thread_id": thread_id}}
     else:
         input_value = Command(resume=resume)
