@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS eval_results (
     gold_sql          TEXT,
     user_message      TEXT,
     full_prompt       TEXT,
+    trajectory        TEXT,
     retrieved_context TEXT,
     thread_id         TEXT,
     error             TEXT,
@@ -60,6 +61,7 @@ ALTER TABLE eval_results ADD COLUMN generated_sql TEXT;
 ALTER TABLE eval_results ADD COLUMN gold_sql TEXT;
 ALTER TABLE eval_results ADD COLUMN user_message TEXT;
 ALTER TABLE eval_results ADD COLUMN full_prompt TEXT;
+ALTER TABLE eval_results ADD COLUMN trajectory TEXT;
 ALTER TABLE eval_results ADD COLUMN retrieved_context TEXT;
 ALTER TABLE eval_results ADD COLUMN thread_id TEXT;
 """
@@ -176,6 +178,7 @@ class EvalStore:
         gold_sql: str | None = None,
         user_message: str | None = None,
         full_prompt: str | None = None,
+        trajectory: str | None = None,
         retrieved_context: str | None = None,
         thread_id: str | None = None,
         error: str | None = None,
@@ -187,9 +190,9 @@ class EvalStore:
             await db.execute(
                 "INSERT INTO eval_results "
                 "(result_id, run_id, case_index, question, passed, scores, answer, "
-                "generated_sql, gold_sql, user_message, full_prompt, retrieved_context, thread_id, "
+                "generated_sql, gold_sql, user_message, full_prompt, trajectory, retrieved_context, thread_id, "
                 "error, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     result_id,
                     run_id,
@@ -202,6 +205,7 @@ class EvalStore:
                     gold_sql,
                     user_message,
                     full_prompt,
+                    trajectory,
                     retrieved_context,
                     thread_id,
                     error,
@@ -281,7 +285,7 @@ class EvalStore:
         async with aiosqlite.connect(self._db_path) as db:
             async with db.execute(
                 "SELECT result_id, run_id, case_index, question, passed, scores, answer, "
-                "generated_sql, gold_sql, user_message, full_prompt, retrieved_context, thread_id, "
+                "generated_sql, gold_sql, user_message, full_prompt, trajectory, retrieved_context, thread_id, "
                 "error, created_at FROM eval_results "
                 "WHERE run_id = ? ORDER BY case_index",
                 (run_id,),
@@ -300,10 +304,11 @@ class EvalStore:
                 "gold_sql": row[8],
                 "user_message": row[9],
                 "full_prompt": row[10],
-                "retrieved_context": row[11],
-                "thread_id": row[12],
-                "error": row[13],
-                "created_at": row[14],
+                "trajectory": row[11],
+                "retrieved_context": row[12],
+                "thread_id": row[13],
+                "error": row[14],
+                "created_at": row[15],
             }
             for row in rows
         ]

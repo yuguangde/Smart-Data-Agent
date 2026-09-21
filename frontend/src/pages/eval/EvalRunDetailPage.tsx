@@ -25,6 +25,18 @@ import { fetchEvalRun } from "@/api/eval";
 import type { ThreadHistoryResponse } from "@/types/chat";
 import type { EvalCaseResult, EvalRunDetail } from "@/types/eval";
 
+interface TrajectoryMessage {
+  role: string;
+  content?: string;
+  tool_calls?: Array<{
+    id?: string;
+    name?: string;
+    input?: unknown;
+    output?: string;
+  }>;
+  tool_call_id?: string;
+}
+
 const { Text, Title } = Typography;
 
 export default function EvalRunDetailPage() {
@@ -34,6 +46,7 @@ export default function EvalRunDetailPage() {
   const [selected, setSelected] = useState<EvalCaseResult | null>(null);
   const [history, setHistory] = useState<ThreadHistoryResponse | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [trajectory, setTrajectory] = useState<TrajectoryMessage[] | null>(null);
 
   const load = async () => {
     if (!runId) return;
@@ -48,9 +61,116 @@ export default function EvalRunDetailPage() {
     }
   };
 
+  const roleLabel = (role: string) => {
+    switch (role) {
+      case "system":
+        return "系统";
+      case "user":
+        return "用户";
+      case "assistant":
+        return "模型";
+      default:
+        return role;
+    }
+  };
+
+  const renderMessage = (msg: TrajectoryMessage, idx: number) => (
+    <div key={idx} style={{ width: "100%" }}>
+      <Tag
+        color={
+          msg.role === "system"
+            ? "orange"
+            : msg.role === "user"
+              ? "blue"
+              : msg.role === "assistant"
+                ? "purple"
+                : "default"
+        }
+      >
+        {roleLabel(msg.role)}
+      </Tag>
+      {msg.content && (
+        <pre
+          style={{
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+            background:
+              msg.role === "system" ? "#fff7e6" : msg.role === "user" ? "#e6f4ff" : "#f6ffed",
+            padding: 8,
+            borderRadius: 4,
+            marginTop: 4,
+            maxHeight: 360,
+            overflow: "auto",
+          }}
+        >
+          {msg.content}
+        </pre>
+      )}
+      {msg.tool_calls && msg.tool_calls.length > 0 && (
+        <div style={{ marginTop: 4 }}>
+          {msg.tool_calls.map((tc, tidx) => (
+            <Card
+              key={tidx}
+              size="small"
+              title={`工具调用: ${tc.name || ""}`}
+              style={{ marginBottom: 4, background: "#fffbe6" }}
+            >
+              <div>
+                <Text strong>输入参数：</Text>
+                <pre
+                  style={{
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    background: "#fff",
+                    padding: 8,
+                    borderRadius: 4,
+                  }}
+                >
+                  {tc.input ? JSON.stringify(tc.input, null, 2) : ""}
+                </pre>
+              </div>
+              {tc.output && (
+                <div style={{ marginTop: 8 }}>
+                  <Text strong>返回结果：</Text>
+                  <pre
+                    style={{
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                      background: "#fff",
+                      padding: 8,
+                      borderRadius: 4,
+                      maxHeight: 240,
+                      overflow: "auto",
+                    }}
+                  >
+                    {typeof tc.output === "string" ? tc.output : JSON.stringify(tc.output, null, 2)}
+                  </pre>
+                </div>
+              )}
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
   const openProcess = async (record: EvalCaseResult) => {
     setSelected(record);
     setHistory(null);
+    setTrajectory(null);
+
+    // Prefer the stored LangGraph trajectory (new runs).
+    if (record.trajectory) {
+      try {
+        const parsed = JSON.parse(record.trajectory) as TrajectoryMessage[];
+        setTrajectory(parsed);
+      } catch (err) {
+        message.error("解析过程记录失败");
+      }
+      return;
+    }
+
+    // Fallback for old runs without trajectory.
     if (record.thread_id) {
       setHistoryLoading(true);
       try {
@@ -67,6 +187,7 @@ export default function EvalRunDetailPage() {
   const closeProcess = () => {
     setSelected(null);
     setHistory(null);
+    setTrajectory(null);
   };
 
   useEffect(() => {
@@ -337,81 +458,35 @@ export default function EvalRunDetailPage() {
               </div>
             )}
 
+            {trajectory && (
+              <Space direction="vertical" style={{ width: "100%" }}>
+                <Text strong>LangGraph 完整过程（系统提示词已包含在内）</Text>
+                {trajectory.map((msg, idx) => renderMessage(msg, idx))}
+              </Space>
+            )}
+
             <Spin spinning={historyLoading}>
-              {history ? (
+              {history && (
                 <Space direction="vertical" style={{ width: "100%" }}>
-                  {history.messages.map((msg, idx) => (
-                    <div key={idx} style={{ width: "100%" }}>
-                      <Tag color={msg.role === "user" ? "blue" : msg.role === "assistant" ? "purple" : "default"}>
-                        {msg.role === "user" ? "用户" : msg.role === "assistant" ? "模型" : msg.role}
-                      </Tag>
-                      {msg.content && (
-                        <pre
-                          style={{
-                            whiteSpace: "pre-wrap",
-                            wordBreak: "break-word",
-                            background: msg.role === "user" ? "#e6f4ff" : "#f6ffed",
-                            padding: 8,
-                            borderRadius: 4,
-                            marginTop: 4,
-                            maxHeight: 360,
-                            overflow: "auto",
-                          }}
-                        >
-                          {msg.content}
-                        </pre>
-                      )}
-                      {msg.tool_calls && msg.tool_calls.length > 0 && (
-                        <div style={{ marginTop: 4 }}>
-                          {msg.tool_calls.map((tc: any, tidx: number) => (
-                            <Card
-                              key={tidx}
-                              size="small"
-                              title={`工具调用: ${tc.name || ""}`}
-                              style={{ marginBottom: 4, background: "#fffbe6" }}
-                            >
-                              <div>
-                                <Text strong>输入参数：</Text>
-                                <pre
-                                  style={{
-                                    whiteSpace: "pre-wrap",
-                                    wordBreak: "break-word",
-                                    background: "#fff",
-                                    padding: 8,
-                                    borderRadius: 4,
-                                  }}
-                                >
-                                  {tc.input ? JSON.stringify(tc.input, null, 2) : ""}
-                                </pre>
-                              </div>
-                              {tc.output && (
-                                <div style={{ marginTop: 8 }}>
-                                  <Text strong>返回结果：</Text>
-                                  <pre
-                                    style={{
-                                      whiteSpace: "pre-wrap",
-                                      wordBreak: "break-word",
-                                      background: "#fff",
-                                      padding: 8,
-                                      borderRadius: 4,
-                                      maxHeight: 240,
-                                      overflow: "auto",
-                                    }}
-                                  >
-                                    {typeof tc.output === "string" ? tc.output : JSON.stringify(tc.output, null, 2)}
-                                  </pre>
-                                </div>
-                              )}
-                            </Card>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                  <Text strong>对话过程（旧 run 回退，不显示 system 消息）</Text>
+                  {history.messages.map((msg, idx) => {
+                    const normalized: TrajectoryMessage = {
+                      role: msg.role,
+                      content: msg.content,
+                      tool_calls: msg.tool_calls?.map((tc: any) => ({
+                        id: tc.id,
+                        name: tc.name,
+                        input: tc.input,
+                      })),
+                    };
+                    return renderMessage(normalized, idx);
+                  })}
                 </Space>
-              ) : selected.thread_id ? (
+              )}
+              {!trajectory && !history && selected?.thread_id && (
                 <Alert message="正在加载对话过程..." type="info" showIcon />
-              ) : (
+              )}
+              {!trajectory && !history && !selected?.thread_id && (
                 <Alert message="该 case 没有保存 thread_id，无法回放生成过程" type="warning" showIcon />
               )}
             </Spin>

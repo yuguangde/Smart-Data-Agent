@@ -198,6 +198,10 @@ class EvalCaseResult(BaseModel):
         default=None,
         description="System prompt plus user_message as seen by the agent LLM.",
     )
+    trajectory: str | None = Field(
+        default=None,
+        description="Raw LangGraph transcript (system + tool messages) for this case.",
+    )
     retrieved_context: str | None = Field(
         default=None,
         description="Semantic-layer snippets retrieved before prompt construction.",

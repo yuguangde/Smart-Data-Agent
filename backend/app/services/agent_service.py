@@ -433,6 +433,44 @@ async def get_history(thread_id: str) -> list[dict[str, Any]]:
     return []
 
 
+async def get_thread_transcript(thread_id: str) -> list[dict[str, Any]]:
+    """Return the full LangGraph transcript for a thread, including system prompt.
+
+    Unlike :func:`get_history`, this does not filter system messages and pairs
+    assistant tool_calls with their matching tool outputs.
+    """
+    graph = get_compiled_graph()
+    config = {"configurable": {"thread_id": thread_id}}
+    try:
+        snapshot = await graph.aget_state(config=config)
+    except Exception as exc:
+        logger.warning("get_thread_transcript(%s) failed: %s", thread_id, exc)
+        return []
+
+    values = getattr(snapshot, "values", None)
+    if isinstance(values, dict):
+        state = values
+    elif isinstance(snapshot, dict):
+        state = snapshot
+    else:
+        return []
+
+    messages = state.get("messages", [])
+    tool_outputs: dict[str, str] = {}
+    for m in messages:
+        if isinstance(m, ToolMessage):
+            tool_outputs[getattr(m, "tool_call_id", None)] = _plain_str(m.content)
+
+    transcript: list[dict[str, Any]] = []
+    for m in messages:
+        msg = _coerce_message(m)
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            for tc in msg["tool_calls"]:
+                tc["output"] = tool_outputs.get(tc.get("id"))
+        transcript.append(msg)
+    return transcript
+
+
 async def _latest_checkpoint_bytes(thread_id: str) -> int:
     """Return the raw byte size of the most recent checkpoint for a thread."""
     settings = get_settings()

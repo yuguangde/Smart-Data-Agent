@@ -53,6 +53,8 @@ export interface EvalCaseResult {
   user_message: string | null;
   /** System prompt plus user_message as seen by the agent LLM. */
   full_prompt: string | null;
+  /** Raw LangGraph transcript (system + tool messages) for this case. */
+  trajectory: string | null;
   /** Semantic-layer snippets retrieved before prompt construction. */
   retrieved_context: string | null;
   /** Agent thread id, which can be used to replay the full trajectory. */

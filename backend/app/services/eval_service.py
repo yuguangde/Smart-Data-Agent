@@ -16,7 +16,7 @@ from app.agent.prompts import build_system_prompt
 from app.config import get_settings
 from app.memory.eval_store import EvalStore
 from app.query.registry import SemanticRegistry
-from app.services.agent_service import invoke
+from app.services.agent_service import get_thread_transcript, invoke
 from app.tools import get_llm_tools
 from app.tools.knowledge_search import _query as _search_knowledge
 from evaluation.metrics.sql_judges import (
@@ -338,6 +338,15 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
         )
         approvals += 1
 
+    # Capture the full LangGraph transcript (system + user + tool messages).
+    thread_id = result.get("thread_id")
+    trajectory = []
+    if thread_id:
+        try:
+            trajectory = await get_thread_transcript(thread_id)
+        except Exception as exc:
+            logger.warning("Failed to capture trajectory for %s: %s", thread_id, exc)
+
     tool_calls = result.get("tool_calls", [])
     answer = result.get("message", {}).get("content", "")
 
@@ -377,6 +386,7 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
             "gold_sql": gold_sql,
             "user_message": user_message,
             "full_prompt": full_prompt,
+            "trajectory": json.dumps(trajectory, ensure_ascii=False, default=str),
             "retrieved_context": retrieved_context,
             "tool_calls": tool_calls,
             "scores": scores,
@@ -396,6 +406,8 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
         "thread_id": result["thread_id"],
         "answer": answer,
         "user_message": user_message,
+        "full_prompt": full_prompt,
+        "trajectory": json.dumps(trajectory, ensure_ascii=False, default=str),
         "retrieved_context": retrieved_context,
         "tool_calls": tool_calls,
         "scores": scores,
@@ -487,6 +499,7 @@ async def run_eval(
                 gold_sql=result.get("gold_sql"),
                 user_message=result.get("user_message"),
                 full_prompt=result.get("full_prompt"),
+                trajectory=result.get("trajectory"),
                 retrieved_context=result.get("retrieved_context"),
                 thread_id=result.get("thread_id"),
                 error=None,
@@ -505,6 +518,7 @@ async def run_eval(
                 generated_sql=None,
                 gold_sql=None,
                 full_prompt=None,
+                trajectory=None,
                 error=str(exc),
             )
 
