@@ -6,10 +6,14 @@ Example:
         evaluation/datasets/bird_mini_dev.jsonl \
         -o /tmp/bird_eval_report.json
 
-The runner works in SQL-only mode: it asks the agent to generate SQL via the
-``execute_sql`` tool, extracts the generated SQL from the tool call, and then
-executes both the gold and generated SQL against the original SQLite database
-to compute execution accuracy.
+The runner asks the agent to generate SQL via the ``execute_sql`` tool,
+extracts the generated SQL from the tool call, and then compares the gold SQL
+with the generated SQL to compute execution accuracy.
+
+- If ``EVAL_STARROCKS_DATABASE`` is unset, both queries run against the
+  original SQLite database shipped with the dataset.
+- If ``EVAL_STARROCKS_DATABASE`` is set, the gold SQL runs on SQLite while the
+  generated SQL runs on the configured StarRocks database (hybrid mode).
 """
 from __future__ import annotations
 
@@ -25,14 +29,15 @@ from app.bootstrap import bootstrap_agent, shutdown_agent
 from app.config import get_settings
 from app.services.agent_service import invoke
 from app.tools import get_llm_tools
-from evaluation.metrics.sql_judges import judge_sql_execution
+from evaluation.metrics.sql_judges import judge_sql_execution, judge_sql_execution_hybrid
 
 
-SYSTEM_PREFIX = """你正在参与 BIRD-SQL 评测。
+def _build_system_prefix(target_db: str) -> str:
+    return f"""你正在参与 BIRD-SQL 评测。
 你的任务是把用户的问题翻译成一个 SQL 查询。
 
 你必须通过调用 `execute_sql` 工具来生成 SQL。
-即使执行环境报错，你提供的 SQL 也会被捕获并评分，所以请专注于写出正确的 SQLite 查询。
+即使执行环境报错，你提供的 SQL 也会被捕获并评分，所以请专注于写出正确的 {target_db} 查询。
 """
 
 
@@ -67,15 +72,25 @@ def _build_user_message(case: dict[str, Any]) -> str:
 
 async def run_case(case: dict[str, Any]) -> dict[str, Any]:
     """Run a single BIRD case and score it by execution accuracy."""
+    settings = get_settings()
     question = case["question"]
     db_path = case.get("db_path", "")
     gold_sql = case.get("expected_args", {}).get("sql", "")
+
+    # When a StarRocks evaluation database is configured, the agent is expected
+    # to produce StarRocks-native SQL and we compare gold (SQLite) vs predicted
+    # (StarRocks). Otherwise both queries run on the original SQLite DB.
+    is_hybrid = bool(settings.eval_starrocks_database)
+    target_db = "StarRocks" if is_hybrid else "SQLite"
 
     user_message = _build_user_message(case)
 
     # Compose the full evaluation system prompt: base rules first, then the
     # BIRD-specific task instruction, so both runners behave consistently.
-    system_prompt = f"{build_system_prompt(get_llm_tools())}\n\n{SYSTEM_PREFIX}"
+    system_prompt = (
+        f"{build_system_prompt(get_llm_tools())}\n\n"
+        f"{_build_system_prefix(target_db)}"
+    )
 
     result = await invoke(
         user_message=user_message,
@@ -116,7 +131,20 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
             },
         }
 
-    passed, reason = await judge_sql_execution(gold_sql, generated_sql, db_path)
+    if is_hybrid:
+        passed, reason = await judge_sql_execution_hybrid(
+            gold_sql,
+            generated_sql,
+            db_path,
+            host=settings.eval_starrocks_host,
+            port=settings.eval_starrocks_port,
+            user=settings.eval_starrocks_user,
+            password=settings.eval_starrocks_password,
+            database=settings.eval_starrocks_database,
+        )
+    else:
+        passed, reason = await judge_sql_execution(gold_sql, generated_sql, db_path)
+
     return {
         "index": case.get("index", 0),
         "question": question,
