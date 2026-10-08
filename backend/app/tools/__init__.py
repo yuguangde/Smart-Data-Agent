@@ -24,7 +24,11 @@ from app.tools.web_search import web_search
 logger = logging.getLogger(__name__)
 
 # Names of tools that should only be called by code, not exposed to the LLM.
-_PROGRAM_ONLY_TOOL_NAMES: set[str] = {"generate_sql", "starrocks_read_query"}
+_PROGRAM_ONLY_TOOL_NAMES: set[str] = {
+    "generate_sql",
+    "starrocks_read_query",
+    "dosi_run_query",  # DoSI 只负责生成 SQL，执行统一走 execute_sql
+}
 
 # Built-in tools that ship with the application.
 BUILTIN_TOOLS: list[BaseTool] = [

@@ -238,6 +238,48 @@ semantic_model:
               expression: COUNT(DISTINCT customers.CustomerID)
         datatype: Integer
         description: 去重客户数量。
+      - name: customer_count_by_currency
+        custom_extensions:
+          - vendor_name: DATUS
+            data: '{"v": "1.5", "params": [{"name": "currency", "type": "string", "allowed": ["EUR", "CZK"], "default": "EUR"}], "derive": {"type": "filter", "base": "customer_count", "where": "customers.Currency = :currency"}}'
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: COUNT(DISTINCT CASE WHEN customers.Currency = 'EUR' THEN customers.CustomerID END)
+        datatype: Integer
+        description: 按指定货币过滤的去重客户数。
+      - name: currency_numerator_customer_count
+        custom_extensions:
+          - vendor_name: DATUS
+            data: '{"v": "1.5", "params": [{"name": "currency_numerator", "type": "string", "allowed": ["EUR", "CZK"], "default": "EUR"}], "derive": {"type": "filter", "base": "customer_count", "where": "customers.Currency = :currency_numerator"}}'
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: COUNT(DISTINCT CASE WHEN customers.Currency = 'EUR' THEN customers.CustomerID END)
+        datatype: Integer
+        description: 指定的分子货币客户数。
+      - name: currency_denominator_customer_count
+        custom_extensions:
+          - vendor_name: DATUS
+            data: '{"v": "1.5", "params": [{"name": "currency_denominator", "type": "string", "allowed": ["EUR", "CZK"], "default": "CZK"}], "derive": {"type": "filter", "base": "customer_count", "where": "customers.Currency = :currency_denominator"}}'
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: COUNT(DISTINCT CASE WHEN customers.Currency = 'CZK' THEN customers.CustomerID END)
+        datatype: Integer
+        description: 指定的分母货币客户数。
+      - name: currency_customer_ratio
+        custom_extensions:
+          - vendor_name: DATUS
+            data: '{"v": "1.5", "derive": {"type": "compose", "expr": "currency_numerator_customer_count * 1.0 / NULLIF(currency_denominator_customer_count, 0)"}}'
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: COUNT(DISTINCT CASE WHEN customers.Currency = 'EUR' THEN customers.CustomerID END) * 1.0 / NULLIF(COUNT(DISTINCT CASE WHEN customers.Currency = 'CZK' THEN customers.CustomerID END), 0)
+        datatype: Float
+        description: 两种货币下客户数量之比。查询时通过 currency_numerator 指定分子，currency_denominator 指定分母。
+        ai_context:
+          instructions: 当问题要求计算两种货币顾客数之比时，优先使用本指标；通过 params 传入分子 currency_numerator 与分母 currency_denominator。
       - name: station_count
         expression:
           dialects:

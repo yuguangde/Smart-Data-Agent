@@ -98,15 +98,19 @@ def add_case(dataset_name: str, case: dict[str, Any]) -> Path:
     return path
 
 
-def _extract_tool_sql(tool_calls: list[dict[str, Any]]) -> str:
+def _extract_tool_sql(tool_calls: list[dict[str, Any]], *, last: bool = True) -> str:
     """Return SQL executed by the agent, regardless of which tool produced it.
 
     Supports plain ``execute_sql`` as well as DoSI tools that return SQL in
     their output text (``dosi_compile_sql``, ``dosi_run_query``).
+
+    By default the *last* matching SQL is returned, so that evaluations score
+    the final SQL the agent produced rather than an intermediate probe.
     """
     import json as _json
 
-    for call in tool_calls:
+    calls = reversed(tool_calls) if last else tool_calls
+    for call in calls:
         name = call.get("name") or ""
         args = call.get("args") or call.get("input") or {}
 
@@ -128,17 +132,31 @@ def _extract_tool_sql(tool_calls: list[dict[str, Any]]) -> str:
     return ""
 
 
-_BIRD_EVAL_INSTRUCTION = "你正在参与 BIRD-SQL 评测。请为下面的问题生成 SQL 并执行查询，返回查询结果。"
+def _build_bird_eval_instruction(*, use_dosi: bool) -> str:
+    """Return the BIRD-SQL task instruction appended to the system prompt."""
+    if use_dosi:
+        return (
+            "你正在参与 BIRD-SQL 评测。请为下面的问题生成 SQL 并执行查询，返回查询结果。\n"
+            "请优先使用 DoSI 工具基于语义层生成 SQL（只使用 `dosi_compile_sql` 生成 SQL，"
+            "严禁使用 `dosi_run_query` 直接执行），如果 DoSI 无法生成符合要求的 SQL，"
+            "再回退到模型直接生成 SQL。最后都由 `execute_sql` 直接执行 SQL。\n"
+            "评测中禁止使用 `calculator` 对查询结果做二次计算；问题所要求的目标值必须在 SQL 中一次性计算完成。"
+        )
+    return (
+        "你正在参与 BIRD-SQL 评测。请为下面的问题生成 SQL 并执行查询，返回查询结果。\n"
+        "你必须通过调用 `execute_sql` 工具来生成 SQL。"
+    )
 
 
-def _build_bird_system_prompt(tools: list[BaseTool]) -> str:
+def _build_bird_system_prompt(tools: list[BaseTool], *, use_dosi: bool) -> str:
     """Build the system prompt for BIRD evaluation runs.
 
     The base system prompt already contains general behaviour rules (DoSI
     preference, column rules, single-answer LIMIT 1, etc.). This appends the
     BIRD task instruction after it so the model sees the evaluation context.
     """
-    return f"{build_system_prompt(tools)}\n\n{_BIRD_EVAL_INSTRUCTION}"
+    instruction = _build_bird_eval_instruction(use_dosi=use_dosi)
+    return f"{build_system_prompt(tools)}\n\n{instruction}"
 
 
 def _build_bird_message(case: dict[str, Any]) -> str:
@@ -178,7 +196,9 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
     settings = get_settings()
 
     if schema:
-        system_prompt = _build_bird_system_prompt(get_llm_tools())
+        # If DoSI MCP is enabled, ask the model to try the semantic layer first.
+        use_dosi = bool(settings.dosi_mcp_enabled)
+        system_prompt = _build_bird_system_prompt(get_llm_tools(), use_dosi=use_dosi)
         user_message = _build_bird_message(case)
     else:
         system_prompt = build_system_prompt(get_llm_tools())

@@ -32,7 +32,17 @@ from app.tools import get_llm_tools
 from evaluation.metrics.sql_judges import judge_sql_execution, judge_sql_execution_hybrid
 
 
-def _build_system_prefix(target_db: str) -> str:
+def _build_system_prefix(target_db: str, *, use_dosi: bool) -> str:
+    if use_dosi:
+        return f"""你正在参与 BIRD-SQL 评测。
+你的任务是把用户的问题翻译成一个 SQL 查询。
+
+请优先使用 DoSI 工具（如 `dosi_list_metrics`、`dosi_list_dimensions`、`dosi_compile_sql`）基于语义层生成 {target_db} SQL；
+生成的 SQL 必须通过 `execute_sql` 执行。严禁使用 `dosi_run_query` 直接取数。
+如果 DoSI 无法生成符合要求的查询，再回退到 `execute_sql` 直接写出 {target_db} SQL。
+评测中禁止使用 `calculator`，所有计算必须在 SQL 中完成。
+即使执行环境报错，你提供的 SQL 也会被捕获并评分，所以请专注于写出正确的查询。
+"""
     return f"""你正在参与 BIRD-SQL 评测。
 你的任务是把用户的问题翻译成一个 SQL 查询。
 
@@ -53,9 +63,13 @@ def _load_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def _extract_generated_sql(result: dict[str, Any]) -> str:
-    """Extract SQL from the agent's execute_sql tool call, if present."""
+    """Extract the last SQL from the agent's tool calls, if present.
+
+    Scoring uses the final SQL (and its result values) rather than the first
+    one, so intermediate probe queries do not override the agent's final answer.
+    """
     tool_calls = result.get("tool_calls", [])
-    for call in tool_calls:
+    for call in reversed(tool_calls):
         name = call.get("name") or ""
         if name != "execute_sql":
             continue
@@ -83,13 +97,16 @@ async def run_case(case: dict[str, Any]) -> dict[str, Any]:
     is_hybrid = bool(settings.eval_starrocks_database)
     target_db = "StarRocks" if is_hybrid else "SQLite"
 
+    # If DoSI MCP is enabled, ask the model to try the semantic layer first.
+    use_dosi = bool(settings.dosi_mcp_enabled)
+
     user_message = _build_user_message(case)
 
     # Compose the full evaluation system prompt: base rules first, then the
     # BIRD-specific task instruction, so both runners behave consistently.
     system_prompt = (
         f"{build_system_prompt(get_llm_tools())}\n\n"
-        f"{_build_system_prefix(target_db)}"
+        f"{_build_system_prefix(target_db, use_dosi=use_dosi)}"
     )
 
     result = await invoke(
