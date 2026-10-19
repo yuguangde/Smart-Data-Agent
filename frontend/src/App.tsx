@@ -16,14 +16,27 @@ import {
   RobotOutlined,
 } from "@ant-design/icons";
 import { Welcome } from "@ant-design/x";
-import { Alert, ConfigProvider, Layout, Space, Tag, Typography, theme } from "antd";
+import {
+  Alert,
+  ConfigProvider,
+  Layout,
+  Space,
+  Tag,
+  Tooltip,
+  Typography,
+  message,
+  theme,
+} from "antd";
 import zhCN from "antd/locale/zh_CN";
 import "antd/dist/reset.css";
 
 import { ChatList } from "@/components/ChatList";
+import { ContextUsage } from "@/components/ContextUsage";
+import { ReviewPanel } from "@/components/ReviewPanel";
 import { SenderBox } from "@/components/SenderBox";
 import { Sidebar } from "@/components/Sidebar";
 import { useChatStore } from "@/store/useChatStore";
+import { useReviewStore } from "@/store/useReviewStore";
 
 const { Header, Sider, Content, Footer } = Layout;
 const { Title, Text } = Typography;
@@ -45,6 +58,15 @@ export default function App() {
     removeConversation,
     stop,
   } = useChatStore();
+
+  const review = useReviewStore();
+
+  const handleReview = async (targetThreadId: string) => {
+    const loaded = await review.loadLatestReview(targetThreadId);
+    if (!loaded) {
+      review.runReview(targetThreadId);
+    }
+  };
 
   const showWelcome = messages.length === 0 && !pendingHistory;
 
@@ -72,9 +94,25 @@ export default function App() {
             <Tag icon={<ApiOutlined />} color="cyan">
               SSE
             </Tag>
-            <Text style={{ color: "rgba(255,255,255,0.85)" }}>
-              {threadId ? `thread: ${threadId.slice(0, 8)}…` : "尚未开启会话"}
-            </Text>
+            <Tooltip title={threadId || "尚未开启会话"} placement="bottom">
+              <Text
+                style={{
+                  color: "rgba(255,255,255,0.85)",
+                  cursor: threadId ? "pointer" : "default",
+                }}
+                onDoubleClick={async () => {
+                  if (!threadId) return;
+                  try {
+                    await navigator.clipboard.writeText(threadId);
+                    message.success("Thread ID 已复制");
+                  } catch {
+                    message.error("复制失败");
+                  }
+                }}
+              >
+                {threadId ? `thread: ${threadId.slice(0, 8)}…` : "尚未开启会话"}
+              </Text>
+            </Tooltip>
             <a
               href="https://github.com/anthropics/claude-code"
               target="_blank"
@@ -125,7 +163,12 @@ export default function App() {
                   style={{ background: "transparent" }}
                 />
               ) : (
-                <ChatList messages={messages} loading={loading} />
+                <ChatList
+                  messages={messages}
+                  loading={loading}
+                  threadId={threadId}
+                  onReview={handleReview}
+                />
               )}
             </Content>
 
@@ -141,9 +184,16 @@ export default function App() {
                 onApprove={approveTool}
                 onStop={stop}
               />
+              <ContextUsage
+                threadId={threadId}
+                messages={messages}
+                loading={loading}
+              />
             </Footer>
           </Layout>
         </Layout>
+
+        <ReviewPanel {...review} onClose={review.closeReview} />
       </Layout>
     </ConfigProvider>
   );

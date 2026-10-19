@@ -1,16 +1,29 @@
-"""Graph nodes: agent (LLM) and the ToolNode runner."""
+"""Graph nodes: agent (LLM), tool marshal, and the ToolNode runner."""
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import TYPE_CHECKING
+import re
+from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Any
 
-from langchain_core.messages import AIMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
+from langchain_core.runnables import RunnableConfig
 from langgraph.prebuilt import ToolNode
 
 from app.agent.prompts import build_system_prompt
+from app.memory.summary_store import get_summary_store
+from app.agent.review import SENSITIVE_TOOL_NAMES
 from app.agent.state import AgentState
+from app.config import get_settings
 from app.llm.factory import get_llm
-from app.tools import get_all_tools
+from app.tools import get_llm_tools, get_program_only_tool_names
 
 if TYPE_CHECKING:
     from langchain_core.language_models import BaseChatModel
@@ -18,15 +31,230 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Serialize tool invocations.  LangGraph's ToolNode executes tool_calls in
+# parallel by default; combined with MCP tools that share a single session,
+# this has led to empty tool outputs and state corruption.  This lock forces
+# one tool call at a time.
+_TOOL_CALL_SERIAL_LOCK = asyncio.Lock()
 
-_MODULE_SIG: tuple | None = None
-_GRAPH_CACHE: dict[str, object] = {}
+# Retention window for messages passed to the LLM. Messages older than this
+# are dropped so long-running threads do not overflow the model context.
+_CONTEXT_RETENTION_WINDOW = timedelta(hours=2)
+
+
+def _utc_now_iso() -> str:
+    """Return the current UTC time in ISO-8601 format."""
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _plain_str(content: Any) -> str:
+    """Coerce LangChain message content (str | list[dict]) to a flat string."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if text:
+                    parts.append(str(text))
+            elif isinstance(item, str):
+                parts.append(item)
+        return "".join(parts)
+    return str(content)
+
+
+# Process-monologue patterns we strip from the front of assistant content.
+# Despite the system prompt telling the model not to narrate tool usage,
+# some model/versions still emit phrases like
+# "I'll start by getting the semantic context for this dataset." in English,
+# or their Chinese equivalents.
+_LEADING_PROCESS_MONOLOGUE_RE = re.compile(
+    r"^(?:"
+    # Exact phrase from observed bug.
+    r"I(?:'ll| will) start by getting the semantic context for this dataset\.?\s*|"
+    # Generic English narration that announces a tool / planned action.
+    r"(?:I(?:'ll| will|'m going to| am going to| need to| want to| have to)|"
+    r"Let me|Let's|We(?:'ll| will| can))\s+"
+    r"(?:first\s+)?(?:start\s+(?:by|to)\s+)?"
+    r"(?:get|getting|retrieve|retrieving|fetch|fetching|obtain|obtaining|"
+    r"query|querying|call|calling|invoke|invoking|use|using|"
+    r"look(?:\s+at|ing\s+at)?|check|checking|analyze|analyzing|"
+    r"calculate|calculating|compute|computing|search|searching|find out|finding)\s+"
+    r"[^\n#]*?(?:\n(?=#{1,6}\s)|[\.\,，\:\;\!\?]|\Z)\s*|"
+    # Chinese narration that announces a tool / planned action.
+    r"(?:让我先?|我们?先?|(?:我会|我需要|我将|我要)(?:先|会|将)?|"
+    r"首先[，,]?|接下来[，,]?)?"
+    r"(?:查询|调用|获取|得到|查看|检查|分析|计算|检索|搜|查找|查|算)[^\n#]*?"
+    r"(?:\n(?=#{1,6}\s)|[。，\.\:,;!\?]|\Z)\s*"
+    r")",
+    re.IGNORECASE | re.UNICODE,
+)
+
+
+def _sanitize_ai_content(content: Any, has_tool_calls: bool) -> str:
+    """Strip process monologues from assistant content.
+
+    - When the model decided to call a tool, its content must be empty.
+      The system prompt already requires this, but some models still emit a
+      short narration before tool_calls; we enforce it post-hoc.
+    - For the final answer we remove leading English/Chinese prefixes like
+      "I'll start by getting the semantic context..." / "我先查询一下...".
+    """
+    if has_tool_calls:
+        return ""
+
+    text = _plain_str(content).strip()
+    # Iterate: models sometimes emit several short process sentences in a row
+    # before the real answer (rare, but cheap to collapse).
+    for _ in range(3):
+        cleaned = _LEADING_PROCESS_MONOLOGUE_RE.sub("", text).strip()
+        if cleaned == text:
+            break
+        text = cleaned
+    return text
+
+
+def _msg_timestamp(msg: BaseMessage) -> datetime | None:
+    """Extract a message timestamp from its additional_kwargs, if present."""
+    raw = getattr(msg, "additional_kwargs", None) or {}
+    ts = raw.get("timestamp")
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(ts)
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
+def _drop_unfulfilled_tool_calls(
+    messages: list[BaseMessage],
+) -> list[BaseMessage]:
+    """Drop AI messages whose tool_calls lack matching ToolMessages.
+
+    This fixes checkpoints created when a tool crashed before writing its
+    ``ToolMessage``: an assistant message with dangling ``tool_calls`` would
+    otherwise make the OpenAI API reject the request.
+    """
+    fulfilled_tool_ids = {
+        msg.tool_call_id
+        for msg in messages
+        if isinstance(msg, ToolMessage)
+    }
+
+    unfulfilled_tool_ids: set[str] = set()
+    for msg in messages:
+        if isinstance(msg, AIMessage) and msg.tool_calls:
+            for tc in msg.tool_calls:
+                tc_id = tc.get("id")
+                if tc_id and tc_id not in fulfilled_tool_ids:
+                    unfulfilled_tool_ids.add(tc_id)
+
+    if not unfulfilled_tool_ids:
+        return messages
+
+    logger.warning(
+        "Dropping %d unfulfilled tool_call(s) to keep message sequence valid",
+        len(unfulfilled_tool_ids),
+    )
+
+    cleaned: list[BaseMessage] = []
+    for msg in messages:
+        if isinstance(msg, AIMessage) and msg.tool_calls:
+            if any(
+                tc.get("id") in unfulfilled_tool_ids for tc in msg.tool_calls
+            ):
+                continue
+        if isinstance(msg, ToolMessage) and msg.tool_call_id in unfulfilled_tool_ids:
+            continue
+        cleaned.append(msg)
+    return cleaned
+
+
+def _filter_recent_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
+    """Drop messages outside the retention window and ensure the first kept
+    message is a human message.
+
+    Tool messages whose parent AI/tool_call request was dropped are also
+    removed to keep the message sequence valid for the chat model.
+    """
+    if not messages:
+        return messages
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - _CONTEXT_RETENTION_WINDOW
+
+    retained: list[BaseMessage] = []
+    for msg in messages:
+        ts = _msg_timestamp(msg)
+        # Missing timestamp means "unknown / pre-policy message": treat as old.
+        if ts is not None and ts < cutoff:
+            continue
+        retained.append(msg)
+
+    # Drop tool messages whose matching assistant tool_call is no longer kept.
+    cleaned: list[BaseMessage] = []
+    for msg in retained:
+        if isinstance(msg, ToolMessage):
+            parent_present = any(
+                isinstance(prev, AIMessage)
+                and prev.tool_calls is not None
+                and any(
+                    tc.get("id") == msg.tool_call_id for tc in prev.tool_calls
+                )
+                for prev in cleaned
+            )
+            if not parent_present:
+                continue
+        cleaned.append(msg)
+
+    cleaned = _drop_unfulfilled_tool_calls(cleaned)
+
+    # Ensure the first retained message is from the user.
+    first_human = next(
+        (i for i, m in enumerate(cleaned) if isinstance(m, HumanMessage)),
+        None,
+    )
+    if first_human is None:
+        return []
+    return cleaned[first_human:]
+
+
+async def _serializing_awrap_tool_call(request, execute):
+    """Wrapper that executes each tool call under a global async lock.
+
+    Also enforces ``mcp_call_timeout_seconds`` so a hanging StarRocks/MCP call
+    does not leave the graph stuck at a pending tool_call forever. Any other
+    exception is converted to a tool result string so LangGraph always writes a
+    ``ToolMessage`` and the next LLM call sees a valid message sequence.
+    """
+    settings = get_settings()
+    timeout = max(settings.mcp_call_timeout_seconds, 1.0)
+
+    async with _TOOL_CALL_SERIAL_LOCK:
+        try:
+            return await asyncio.wait_for(execute(request), timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.warning("Tool call timed out after %.1fs", timeout)
+            return f"工具调用超时（>{timeout}s），未获得响应"
+        except Exception as exc:
+            logger.warning("Tool call failed: %s", exc)
+            return f"工具调用失败: {exc}"
 
 
 def _build_model_with_tools() -> tuple["BaseChatModel", list["BaseTool"]]:
-    tools = get_all_tools()
+    tools = get_llm_tools()
     chat = get_llm(with_tools=tools)
     return chat, tools
+
+
+def build_tool_node(tools: list["BaseTool"] | None = None) -> ToolNode:
+    """Return a ToolNode that executes the given tools with MCP serialization.
+
+    Defaults to the currently registered LLM-visible tools.
+    """
+    tool_list = tools if tools is not None else get_llm_tools()
+    return ToolNode(tool_list, awrap_tool_call=_serializing_awrap_tool_call)
 
 
 def current_tool_signature() -> tuple:
@@ -37,11 +265,63 @@ def current_tool_signature() -> tuple:
     tools at startup), ``make_agent_node_cache_key`` flips and the cached
     compiled graph in ``graph.build_graph()`` is invalidated.
     """
-    return tuple(sorted(t.name for t in get_all_tools()))
+    return tuple(sorted(t.name for t in get_llm_tools()))
+
+
+async def _call_llm(
+    state: AgentState,
+    chat: "BaseChatModel",
+    system_prompt: str,
+    thread_id: str | None = None,
+    *,
+    final_turn: bool = False,
+) -> AIMessage:
+    """Run the LLM with the system prompt and optional stale summary injected."""
+    # Keep only messages inside the retention window and start with a user turn.
+    messages = _filter_recent_messages(list(state.get("messages", [])))
+
+    # Inject system prompt exactly once, at the front.
+    llm_messages: list[BaseMessage] = [SystemMessage(content=system_prompt)]
+    if final_turn:
+        # When this is the last allowed iteration, force the model to answer
+        # directly instead of emitting tool_calls that will never be executed.
+        llm_messages.append(
+            SystemMessage(
+                content="注意：你已达到本次请求的最大迭代次数。请基于已获得的工具结果直接给出最终回答，不要再发起新的工具调用。"
+            )
+        )
+
+    # If a persisted summary exists for older context, add it after the prompt.
+    if thread_id:
+        summary_store = get_summary_store()
+        if summary_store is not None:
+            try:
+                summary_row = await summary_store.get_summary(thread_id)
+            except Exception as exc:
+                logger.warning("Failed to load summary for %s: %s", thread_id, exc)
+                summary_row = None
+            if summary_row:
+                summary_msg = SystemMessage(
+                    content=f"历史会话摘要：\n{summary_row['summary'].strip()}",
+                    additional_kwargs={"is_summary": True},
+                )
+                llm_messages.append(summary_msg)
+
+    llm_messages.extend(messages)
+
+    # Use async invoke so LangGraph's astream_events() emits per-token
+    # ``on_chat_model_stream`` events; the sync .invoke() blocks the event
+    # loop and causes ``message → done → end`` with zero ``token`` frames.
+    response: AIMessage = await chat.ainvoke(llm_messages)
+    response.content = _sanitize_ai_content(
+        response.content,
+        bool(getattr(response, "tool_calls", None)),
+    )
+    return response
 
 
 def make_agent_node():
-    """Return a node that calls the LLM, injecting the system prompt on the first turn.
+    """Return the agent LLM node, the ToolNode runner, and the tool marshal node.
 
     Each invocation rebuilds ``chat`` only if env / settings changed; tools are
     unchanged across turns. We accept the small overhead rather than reaching
@@ -49,26 +329,148 @@ def make_agent_node():
     cleanly.
     """
     chat, tools = _build_model_with_tools()
-    tool_node = ToolNode(tools)
-    system_prompt = build_system_prompt(tools)
+    # Build a tool-free model for the final iteration so the agent is forced to
+    # synthesize an answer instead of emitting tool_calls that the graph would
+    # truncate because of MAX_ITERATIONS.
+    chat_final = get_llm()
+    # Serialize tool execution to avoid empty outputs caused by parallel MCP
+    # invocations under a shared session.
+    raw_tool_node = build_tool_node(tools)
+    marshal_node = make_marshal_node()
+    default_system_prompt = build_system_prompt(tools)
 
-    async def agent_node(state: AgentState) -> AgentState:
-        messages = state["messages"]
-        # Inject system prompt exactly once, at the front.
-        if not messages or not isinstance(messages[0], SystemMessage):
-            messages = [SystemMessage(content=system_prompt), *messages]
-            state["messages"] = messages
-
-        # Use async invoke so LangGraph's astream_events() emits per-token
-        # ``on_chat_model_stream`` events; the sync .invoke() blocks the event
-        # loop and causes ``message → done → end`` with zero ``token`` frames.
-        response: AIMessage = await chat.ainvoke(messages)
+    async def agent_node(
+        state: AgentState,
+        config: RunnableConfig,
+    ) -> AgentState:
+        thread_id = config.get("configurable", {}).get("thread_id") if config else None
+        settings = get_settings()
+        iterations = state.get("iterations", 0)
+        is_last_turn = iterations + 1 >= settings.max_iterations
+        # Use the caller-provided system prompt when present; otherwise fall back
+        # to the default prompt built from the current tool list.
+        system_prompt = state.get("system_prompt") or default_system_prompt
+        # On the last allowed iteration, bind no tools and tell the model to
+        # answer directly, preventing unfulfilled tool_calls at graph end.
+        current_chat = chat_final if is_last_turn else chat
+        response: AIMessage = await _call_llm(
+            state,
+            current_chat,
+            system_prompt,
+            thread_id=thread_id,
+            final_turn=is_last_turn,
+        )
+        # Timestamp the assistant message for retention policy.
+        response.additional_kwargs = {
+            **(response.additional_kwargs or {}),
+            "timestamp": _utc_now_iso(),
+        }
         return {
             "messages": [response],
-            "iterations": state.get("iterations", 0) + 1,
+            "iterations": iterations + 1,
         }
 
-    return agent_node, tool_node
+    async def tool_node(state: AgentState) -> AgentState:
+        """Run tools and stamp each ToolMessage with a timestamp."""
+        result = await raw_tool_node.ainvoke(state)
+        for msg in result.get("messages", []):
+            if isinstance(msg, ToolMessage):
+                msg.additional_kwargs = {
+                    **(msg.additional_kwargs or {}),
+                    "timestamp": _utc_now_iso(),
+                }
+        return result
+
+    return agent_node, tool_node, marshal_node
 
 
-__all__ = ["make_agent_node", "current_tool_signature"]
+def make_marshal_node():
+    """Return a node that validates and routes LLM-produced tool calls.
+
+    The LLM only reasons about which tools to call; this node enforces the
+    boundary between reasoning and execution:
+
+    - Filters out program-only tools (e.g. ``starrocks_read_query``) so the
+      agent can never bypass the data pipeline or the SQL executor.
+    - Detects sensitive tools (e.g. ``read_file``) and pauses the graph by
+      storing the pending calls in ``pending_tool_calls`` for HIL review.
+    - Leaves non-sensitive calls in the last assistant message so ToolNode can
+      execute them directly.
+    """
+    program_only = get_program_only_tool_names()
+    sensitive = SENSITIVE_TOOL_NAMES
+
+    def _rewrite_last_ai(
+        messages: list[BaseMessage],
+        tool_calls: list[dict[str, Any]] | None,
+    ) -> list[BaseMessage]:
+        """Replace the last AIMessage with a copy whose tool_calls are updated."""
+        if not messages:
+            return messages
+        last_msg = messages[-1]
+        if not isinstance(last_msg, AIMessage):
+            return messages
+        messages[-1] = AIMessage(
+            content=last_msg.content,
+            id=last_msg.id,
+            tool_calls=tool_calls or [],
+            additional_kwargs=last_msg.additional_kwargs,
+        )
+        return messages
+
+    async def marshal_node(state: AgentState) -> dict[str, Any]:
+        messages = list(state.get("messages", []))
+        if not messages:
+            return {"pending_tool_calls": None}
+
+        last_msg = messages[-1]
+        if not isinstance(last_msg, AIMessage):
+            return {"pending_tool_calls": None}
+
+        tool_calls = list(getattr(last_msg, "tool_calls", None) or [])
+        if not tool_calls:
+            return {"pending_tool_calls": None}
+
+        # Defensive filter: the LLM should never see program-only tools, but
+        # guard against misconfiguration that exposes them.
+        allowed_calls = [
+            tc for tc in tool_calls if tc.get("name") not in program_only
+        ]
+        filtered = [tc for tc in tool_calls if tc.get("name") in program_only]
+        if filtered:
+            logger.warning(
+                "Filtered program-only tool calls the LLM should not have produced: %s",
+                [tc.get("name") for tc in filtered],
+            )
+
+        if not allowed_calls:
+            return {
+                "messages": _rewrite_last_ai(messages, []),
+                "pending_tool_calls": None,
+            }
+
+        sensitive_calls = [tc for tc in allowed_calls if tc.get("name") in sensitive]
+        if sensitive_calls:
+            # Erase tool_calls from the assistant message so ToolNode will not
+            # execute them until the review node restores them.
+            return {
+                "messages": _rewrite_last_ai(messages, []),
+                "pending_tool_calls": allowed_calls,
+            }
+
+        # Non-sensitive calls: proceed straight to ToolNode.
+        return {
+            "messages": _rewrite_last_ai(messages, allowed_calls),
+            "pending_tool_calls": None,
+        }
+
+    return marshal_node
+
+
+__all__ = [
+    "make_agent_node",
+    "current_tool_signature",
+    "make_marshal_node",
+    "build_tool_node",
+    "_call_llm",
+]

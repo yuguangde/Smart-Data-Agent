@@ -20,8 +20,10 @@ from app.api.schemas import (
     ToolApprovalResume,
 )
 from app.config import get_settings
+from app.memory.summary_store import get_summary_store
 from app.services.agent_service import (
     get_history,
+    get_thread_context_stats,
     invoke,
     new_thread_id,
     stream_events,
@@ -33,39 +35,68 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["chat"])
 
 
+def _server_status_from(raw: dict[str, Any] | None) -> MCPServerStatus:
+    """Convert an MCP status dict into a typed schema model."""
+    raw = raw or {}
+    return MCPServerStatus(
+        enabled=bool(raw.get("enabled", False)),
+        configured=bool(raw.get("configured", False)),
+        connected=bool(raw.get("connected", False)),
+        server_name=str(raw.get("server_name", "")),
+        url=str(raw.get("url", "")),
+        transport=str(raw.get("transport", "")),
+        tool_count=int(raw.get("tool_count", 0)),
+        tool_names=list(raw.get("tool_names", [])),
+        error=raw.get("error"),
+    )
+
+
 @router.get("/health", response_model=HealthResponse, summary="Liveness/readiness probe")
 async def health() -> HealthResponse:
     settings = get_settings()
-    mcp_payload = mcp_tools_status() or {}
-    mcp_block_required = bool(
-        settings.mcp_enabled and settings.mcp_url
-    )
-    mcp_connected = bool(mcp_payload.get("connected"))
-    overall = (
-        "degraded"
-        if mcp_block_required and not mcp_connected
-        else "ok"
-    )
+    mcp_status = mcp_tools_status() or {}
+
+    # Build per-server status map. Fall back to a single StarRocks entry when the
+    # loader has not yet produced a multi-server payload.
+    servers_raw: dict[str, dict[str, Any]] = mcp_status.get("servers") or {}
+    if not servers_raw:
+        servers_raw = {settings.mcp_server_name: mcp_status.get("mcp") or {}}
+    servers = {
+        name: _server_status_from(raw)
+        for name, raw in servers_raw.items()
+    }
+
+    # If any enabled+configured server is not connected, the instance is degraded.
+    overall = "ok"
+    for status in servers.values():
+        if status.enabled and status.configured and not status.connected:
+            overall = "degraded"
+            break
+
+    # Preserve the legacy single-server entry for backwards compatibility.
+    legacy_mcp = mcp_status.get("mcp") or {}
+    legacy = _server_status_from(legacy_mcp)
+    if not legacy.server_name and settings.mcp_server_name:
+        legacy.server_name = settings.mcp_server_name
+    if not legacy.url and settings.mcp_url:
+        legacy.url = settings.mcp_url
+    if not legacy.transport and settings.mcp_transport:
+        legacy.transport = (
+            settings.mcp_transport.value
+            if hasattr(settings.mcp_transport, "value")
+            else str(settings.mcp_transport)
+        )
+    if not legacy.configured and settings.mcp_enabled and settings.mcp_url:
+        legacy.enabled = settings.mcp_enabled
+        legacy.configured = True
+
     return HealthResponse(
         status=overall,
         llm_provider=settings.llm_provider.value,
         checkpointer=settings.checkpointer.value,
         hitl=settings.hitl,
-        mcp=MCPServerStatus(
-            enabled=bool(settings.mcp_enabled),
-            configured=bool(settings.mcp_enabled and settings.mcp_url),
-            connected=mcp_connected,
-            server_name=str(
-                mcp_payload.get("server_name") or settings.mcp_server_name
-            ),
-            url=str(mcp_payload.get("url") or settings.mcp_url),
-            transport=str(
-                mcp_payload.get("transport") or settings.mcp_transport
-            ),
-            tool_count=int(mcp_payload.get("tool_count", 0)),
-            tool_names=list(mcp_payload.get("tool_names", [])),
-            error=mcp_payload.get("error"),
-        ),
+        mcp=legacy,
+        servers=servers,
     )
 
 
@@ -177,5 +208,31 @@ async def post_chat_stream(req: ChatRequest) -> StreamingResponse:
 async def get_thread(thread_id: str) -> ThreadHistory:
     messages = await get_history(thread_id)
     return ThreadHistory(thread_id=thread_id, messages=[ChatMessage(**m) for m in messages])
+
+
+@router.get(
+    "/threads/{thread_id}/context-size",
+    summary="Estimate the LLM context size for a thread",
+)
+async def get_thread_context_size(thread_id: str) -> dict[str, Any]:
+    """Return approximate token/char statistics for the thread's context."""
+    return await get_thread_context_stats(thread_id)
+
+
+@router.get(
+    "/threads/{thread_id}/summary",
+    summary="Get the persisted summary for a thread",
+)
+async def get_thread_summary(thread_id: str) -> dict[str, Any]:
+    """Return the stored conversation summary, if any."""
+    store = get_summary_store()
+    if store is None:
+        raise HTTPException(
+            status_code=503, detail="summary store is not enabled"
+        )
+    summary = await store.get_summary(thread_id)
+    if summary is None:
+        raise HTTPException(status_code=404, detail="no summary found")
+    return summary
 
 

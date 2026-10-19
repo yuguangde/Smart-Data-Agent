@@ -5,9 +5,14 @@ stay thin and call into this module.
 """
 from __future__ import annotations
 
+import json
 import logging
 import uuid
+from datetime import datetime, timezone
 from typing import Any, AsyncIterator
+
+import aiosqlite
+import tiktoken
 
 from langchain_core.messages import (
     AIMessage,
@@ -19,12 +24,30 @@ from langchain_core.messages import (
 from langgraph.types import Command
 
 from app.agent.graph import get_compiled_graph
+from app.agent.prompts import build_system_prompt
 from app.agent.state import AgentState
+from app.config import get_settings
+from app.tools import get_llm_tools
 
 logger = logging.getLogger(__name__)
 
+# Tokenizer used for approximate LLM context-size diagnostics.
+_TOKEN_ENCODER = tiktoken.get_encoding("cl100k_base")
+
 
 # ---------- Helpers ----------
+
+# LangChain message roles -> frontend-friendly roles.
+_ROLE_MAP = {
+    "ai": "assistant",
+    "human": "user",
+}
+
+
+def _normalise_role(role: str) -> str:
+    """Map LangChain native roles to the roles the frontend expects."""
+    return _ROLE_MAP.get(role, role)
+
 
 def new_thread_id() -> str:
     """Return a fresh opaque thread identifier."""
@@ -51,7 +74,7 @@ def _plain_str(content: Any) -> str:
 def _coerce_message(raw: Any) -> dict[str, Any]:
     """Normalise LangChain message objects and dicts into JSON-friendly shape."""
     if isinstance(raw, BaseMessage):
-        msg_type = raw.type
+        msg_type = _normalise_role(raw.type)
         content = _plain_str(raw.content)
         out: dict[str, Any] = {"role": msg_type, "content": content}
 
@@ -83,7 +106,7 @@ def _coerce_message(raw: Any) -> dict[str, Any]:
         return out
 
     # raw dict (e.g. streamed payload)
-    msg_type = raw.get("role") or raw.get("type", "user")
+    msg_type = _normalise_role(raw.get("role") or raw.get("type", "user"))
     content = _plain_str(raw.get("content", ""))
     out = {"role": msg_type, "content": content}
     if raw.get("tool_calls"):
@@ -197,17 +220,23 @@ def _aggregate_tool_calls(values: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def make_initial_state(
-    thread_id: str,
     user_message: str,
     user_id: str,
     metadata: dict[str, Any],
+    system_prompt: str | None = None,
 ) -> AgentState:
     """Build the input dict expected by LangGraph for a new turn."""
     return {
-        "messages": [HumanMessage(content=user_message)],
+        "messages": [
+            HumanMessage(
+                content=user_message,
+                additional_kwargs={"timestamp": datetime.now(timezone.utc).isoformat()},
+            ),
+        ],
         "user_id": user_id,
         "metadata": metadata,
         "iterations": 0,
+        "system_prompt": system_prompt,
     }
 
 
@@ -220,6 +249,7 @@ async def invoke(
     user_id: str = "anonymous",
     metadata: dict[str, Any] | None = None,
     resume: dict[str, Any] | None = None,
+    system_prompt: str | None = None,
 ) -> dict[str, Any]:
     """Run the agent once and return a JSON-friendly reply.
 
@@ -231,7 +261,9 @@ async def invoke(
     config = {"configurable": {"thread_id": thread_id, "user_id": user_id}}
 
     if resume is None:
-        input_value = make_initial_state(thread_id, user_message, user_id, metadata or {})
+        input_value = make_initial_state(
+            user_message, user_id, metadata or {}, system_prompt=system_prompt
+        )
     else:
         input_value = Command(resume=resume)
 
@@ -267,10 +299,11 @@ async def stream_events(
     user_id: str = "anonymous",
     metadata: dict[str, Any] | None = None,
     resume: dict[str, Any] | None = None,
+    system_prompt: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Yield SSE-friendly events describing the agent run.
 
-    Schema: ``{"event": "message|token|tool_start|tool_end|done|error|tool_approval", "data": ...}``
+    Schema: ``{"event": "message|token|tool_start|tool_end|done|error|tool_approval|sql_approval", "data": ...}``
 
     If ``resume`` is provided, the graph is resumed from a prior interrupt
     (e.g. user approval for a sensitive tool call) instead of starting a new turn.
@@ -280,7 +313,9 @@ async def stream_events(
     config = {"configurable": {"thread_id": thread_id, "user_id": user_id}}
 
     if resume is None:
-        input_value = make_initial_state(thread_id, user_message or "", user_id, metadata or {})
+        input_value = make_initial_state(
+            user_message or "", user_id, metadata or {}, system_prompt=system_prompt
+        )
         yield {"event": "message", "data": {"thread_id": thread_id}}
     else:
         input_value = Command(resume=resume)
@@ -292,6 +327,13 @@ async def stream_events(
             data = ev.get("data", {}) or {}
 
             if kind == "on_chat_model_stream":
+                # Only stream tokens from the final assistant or synthesizer.
+                # Internal LLM calls (e.g. DSL generation inside generate_sql)
+                # would otherwise leak raw JSON into the chat bubble.
+                metadata = ev.get("metadata", {})
+                node = metadata.get("langgraph_node")
+                if node not in ("agent", "synthesize"):
+                    continue
                 chunk = data.get("chunk")
                 if chunk is None:
                     continue
@@ -302,30 +344,36 @@ async def stream_events(
                 if tc_chunks:
                     for tc in tc_chunks:
                         if tc.get("name"):
+                            tc_args = tc.get("args")
                             yield {
                                 "event": "tool_start",
                                 "data": {
                                     "id": tc.get("id"),
                                     "name": tc.get("name"),
+                                    "input": tc_args if isinstance(tc_args, dict) else {},
                                 },
                             }
 
             elif kind == "on_tool_start":
-                tname = data.get("name") or ev.get("name") or ""
-                tool_input = data.get("input", {})
-                yield {
-                    "event": "tool_start",
-                    "data": {
-                        "name": tname,
-                        "input": tool_input if isinstance(tool_input, dict) else {"value": tool_input},
-                    },
-                }
+                # Skip emitting tool_start here: on_chat_model_stream already
+                # emits tool_start with the LLM tool_call_id, which is needed
+                # for the frontend to match tool_start/tool_end pairs correctly.
+                # on_tool_start does not carry the tool_call_id, so emitting it
+                # causes duplicate/confusing cards for tools with the same name.
+                pass
 
             elif kind == "on_tool_end":
                 output = data.get("output", "")
+                tool_call_id: str | None = None
+                if isinstance(output, ToolMessage):
+                    tool_call_id = getattr(output, "tool_call_id", None)
+                    output = output.content
                 yield {
                     "event": "tool_end",
-                    "data": {"output": _plain_str(output)},
+                    "data": {
+                        "id": tool_call_id,
+                        "output": _plain_str(output),
+                    },
                 }
 
             elif kind == "on_chain_end" and name == "LangGraph":
@@ -365,7 +413,14 @@ async def stream_events(
     if interrupts:
         payload = interrupts[0].value if hasattr(interrupts[0], "value") else interrupts[0]
         payload = payload if isinstance(payload, dict) else {}
-        yield {"event": "tool_approval", "data": payload}
+        yield {"event": _approval_event_name(payload), "data": payload}
+
+
+def _approval_event_name(payload: dict[str, Any] | None) -> str:
+    """Map an interrupt payload to the SSE event name exposed to clients."""
+    if isinstance(payload, dict):
+        return str(payload.get("type", "tool_approval"))
+    return "tool_approval"
 
 
 async def get_history(thread_id: str) -> list[dict[str, Any]]:
@@ -386,4 +441,112 @@ async def get_history(thread_id: str) -> list[dict[str, Any]]:
     return []
 
 
-__all__ = ["invoke", "stream_events", "get_history", "new_thread_id"]
+async def get_thread_transcript(thread_id: str) -> list[dict[str, Any]]:
+    """Return the full LangGraph transcript for a thread, including system prompt.
+
+    Unlike :func:`get_history`, this does not filter system messages and pairs
+    assistant tool_calls with their matching tool outputs.
+    """
+    graph = get_compiled_graph()
+    config = {"configurable": {"thread_id": thread_id}}
+    try:
+        snapshot = await graph.aget_state(config=config)
+    except Exception as exc:
+        logger.warning("get_thread_transcript(%s) failed: %s", thread_id, exc)
+        return []
+
+    values = getattr(snapshot, "values", None)
+    if isinstance(values, dict):
+        state = values
+    elif isinstance(snapshot, dict):
+        state = snapshot
+    else:
+        return []
+
+    messages = state.get("messages", [])
+    tool_outputs: dict[str, str] = {}
+    for m in messages:
+        if isinstance(m, ToolMessage):
+            tool_outputs[getattr(m, "tool_call_id", None)] = _plain_str(m.content)
+
+    transcript: list[dict[str, Any]] = []
+    for m in messages:
+        msg = _coerce_message(m)
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            for tc in msg["tool_calls"]:
+                tc["output"] = tool_outputs.get(tc.get("id"))
+        transcript.append(msg)
+    return transcript
+
+
+async def _latest_checkpoint_bytes(thread_id: str) -> int:
+    """Return the raw byte size of the most recent checkpoint for a thread."""
+    settings = get_settings()
+    path = settings.sqlite_path_resolved
+    try:
+        async with aiosqlite.connect(str(path)) as db:
+            async with db.execute(
+                "SELECT length(checkpoint) FROM checkpoints "
+                "WHERE thread_id = ? ORDER BY checkpoint_id DESC LIMIT 1",
+                (thread_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+                return int(row[0]) if row else 0
+    except Exception as exc:
+        logger.warning("Failed to read checkpoint size for %s: %s", thread_id, exc)
+        return 0
+
+
+async def get_thread_context_stats(thread_id: str) -> dict[str, Any]:
+    """Return approximate context-size statistics for a thread.
+
+    The figures account for the injected system prompt plus the merged
+    conversation history that the LLM would see on the next turn.
+    """
+    messages = await get_history(thread_id)
+
+    system_prompt = build_system_prompt(get_llm_tools())
+    system_chars = len(system_prompt)
+    system_tokens = len(_TOKEN_ENCODER.encode(system_prompt))
+
+    message_count = len(messages)
+    tool_call_count = 0
+    messages_chars = 0
+    messages_tokens = 0
+
+    for msg in messages:
+        content = msg.get("content") or ""
+        messages_chars += len(content)
+        messages_tokens += len(_TOKEN_ENCODER.encode(content))
+
+        tool_calls = msg.get("tool_calls") or []
+        if tool_calls:
+            tool_call_count += len(tool_calls)
+            for tc in tool_calls:
+                tc_text = json.dumps(tc, ensure_ascii=False, default=str)
+                messages_chars += len(tc_text)
+                messages_tokens += len(_TOKEN_ENCODER.encode(tc_text))
+
+    raw_checkpoint_bytes = await _latest_checkpoint_bytes(thread_id)
+
+    return {
+        "thread_id": thread_id,
+        "message_count": message_count,
+        "tool_call_count": tool_call_count,
+        "system_prompt_chars": system_chars,
+        "system_prompt_tokens": system_tokens,
+        "messages_chars": messages_chars,
+        "messages_tokens": messages_tokens,
+        "total_chars": system_chars + messages_chars,
+        "total_tokens": system_tokens + messages_tokens,
+        "raw_checkpoint_bytes": raw_checkpoint_bytes,
+    }
+
+
+__all__ = [
+    "invoke",
+    "stream_events",
+    "get_history",
+    "get_thread_context_stats",
+    "new_thread_id",
+]

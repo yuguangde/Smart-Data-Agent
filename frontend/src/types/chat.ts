@@ -118,3 +118,67 @@ export interface DonePayload {
 
 /** Wire payload for the `error` SSE frame. */
 export type ErrorEventPayload = string | { message?: string; detail?: string };
+
+/** Response body for `GET /threads/{thread_id}/context-size`. */
+export interface ThreadContextSizeResponse {
+  thread_id: string;
+  message_count: number;
+  tool_call_count: number;
+  system_prompt_chars: number;
+  system_prompt_tokens: number;
+  messages_chars: number;
+  messages_tokens: number;
+  total_chars: number;
+  total_tokens: number;
+  raw_checkpoint_bytes: number;
+}
+
+/** Response body for `GET /threads/{thread_id}/summary`. */
+export interface ThreadSummaryResponse {
+  thread_id: string;
+  summary: string;
+  summarized_up_to: string;
+  generated_at: string;
+  model: string | null;
+}
+
+/** Request body for `POST /review/stream`. */
+export interface ReviewRequestBody {
+  thread_id: string;
+  strategy?: "reexecute" | "resynthesize";
+}
+
+/** A single difference entry produced by the comparator. */
+export interface ReviewDifference {
+  aspect: string;
+  main: string;
+  review: string;
+  severity: "cosmetic" | "minor" | "major";
+}
+
+/** Payload for the `review_comparison` SSE frame. */
+export interface ReviewComparisonPayload {
+  verdict: "consistent" | "partial" | "inconsistent";
+  summary: string;
+  differences: ReviewDifference[];
+}
+
+/** Response body for `GET /threads/{id}/reviews/latest`. */
+export interface ReviewResponsePayload {
+  primary_thread_id: string;
+  review_thread_id: string;
+  user_question: string;
+  main_report: string;
+  review_report: string;
+  comparison: ReviewComparisonPayload;
+}
+
+/** State kept in the store for a running/finished review. */
+export interface ReviewState {
+  visible: boolean;
+  loading: boolean;
+  mainReport: string;
+  reviewReport: string;
+  toolCalls: ToolCall[];
+  comparison: ReviewComparisonPayload | null;
+}

@@ -2,8 +2,9 @@
  * SenderBox — user-input area.
  *
  * Shows the normal chat input by default. When the backend pauses for a
- * sensitive tool-call approval (e.g. read_file), it replaces the input with
- * an inline approval card so the user can allow or deny the call.
+ * sensitive tool-call approval (e.g. read_file) or SQL execution approval,
+ * it replaces the input with an inline approval card so the user can allow
+ * or deny the action.
  */
 import { Sender } from "@ant-design/x";
 import { Alert, Button, Space } from "antd";
@@ -40,6 +41,52 @@ export function SenderBox({
   };
 
   if (pendingApproval) {
+    const approvalType = approvalPayload?.type as string | undefined;
+
+    if (approvalType === "sql_approval") {
+      const sql = approvalPayload?.sql as string | undefined;
+      return (
+        <div className="sender-row">
+          <Alert
+            type="warning"
+            showIcon
+            message="SQL 执行需要您的确认"
+            description={
+              <Space direction="vertical" size={4} style={{ width: "100%" }}>
+                <span>Agent 请求执行以下 SQL 以获取结果，请确认是否允许？</span>
+                {sql && (
+                  <pre
+                    style={{
+                      maxHeight: 200,
+                      overflow: "auto",
+                      background: "#f6f8fa",
+                      padding: 12,
+                      borderRadius: 6,
+                    }}
+                  >
+                    {sql}
+                  </pre>
+                )}
+                <Space>
+                  <Button
+                    type="primary"
+                    loading={loading}
+                    onClick={() => onApprove(true)}
+                  >
+                    允许
+                  </Button>
+                  <Button danger onClick={() => onApprove(false)}>
+                    拒绝
+                  </Button>
+                </Space>
+              </Space>
+            }
+            style={{ width: "100%" }}
+          />
+        </div>
+      );
+    }
+
     const toolCalls = approvalPayload?.tool_calls as
       | Array<{ name?: string; id?: string }>
       | undefined;

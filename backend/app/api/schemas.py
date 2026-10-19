@@ -85,12 +85,171 @@ class MCPServerStatus(BaseModel):
     error: str | None = Field(default=None)
 
 
+class ReviewRequest(BaseModel):
+    """Request body for POST /review and POST /review/stream."""
+
+    thread_id: str = Field(..., description="Primary thread whose final report should be reviewed.")
+    strategy: Literal["reexecute", "resynthesize"] = Field(
+        default="reexecute",
+        description="reexecute = rerun the data query workflow; resynthesize = rewrite the report from existing results.",
+    )
+
+
+class ReviewComparison(BaseModel):
+    """Result of comparing the primary and review reports."""
+
+    verdict: Literal["consistent", "partial", "inconsistent"] = "partial"
+    summary: str = ""
+    differences: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ReviewResponse(BaseModel):
+    """Response body for POST /review."""
+
+    primary_thread_id: str
+    review_thread_id: str
+    user_question: str
+    main_report: str
+    review_report: str
+    comparison: ReviewComparison
+
+
+class ReviewSummary(BaseModel):
+    """Lightweight review record returned by GET /threads/{id}/reviews."""
+
+    review_id: str
+    thread_id: str
+    strategy: str
+    review_model: str
+    verdict: str
+    summary: str
+    created_at: datetime
+
+
+class EvalDataset(BaseModel):
+    """A JSONL evaluation dataset available on the server."""
+
+    name: str
+    path: str
+    size_bytes: int
+
+
+class EvalDatasetCase(BaseModel):
+    """A single golden case inside a JSONL evaluation dataset."""
+
+    index: int
+    question: str
+    expected_tool: str | None = None
+    expected_args: dict[str, Any] = Field(default_factory=dict)
+    expected_in_answer: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+
+
+class EvalDatasetDetail(BaseModel):
+    """Detailed view of an evaluation dataset, including all its cases."""
+
+    name: str
+    path: str
+    size_bytes: int
+    total: int
+    cases: list[EvalDatasetCase]
+
+
+class EvalRunRequest(BaseModel):
+    """Request body for POST /eval/runs."""
+
+    dataset: str = Field(..., description="Name of the JSONL dataset to evaluate.")
+
+
+class EvalCaseCreateRequest(BaseModel):
+    """Request body for adding a case to a dataset."""
+
+    model_config = ConfigDict(extra="allow")
+
+    case: dict[str, Any] = Field(
+        ..., description="The case object to append to the dataset."
+    )
+
+
+class EvalMetricScore(BaseModel):
+    """Per-metric score for a single case."""
+
+    passed: bool
+    reason: str
+
+
+class EvalCaseResult(BaseModel):
+    """A single case result inside an evaluation run."""
+
+    result_id: str
+    run_id: str
+    case_index: int
+    question: str
+    passed: bool
+    scores: dict[str, EvalMetricScore]
+    answer: str
+    generated_sql: str | None = None
+    gold_sql: str | None = None
+    user_message: str | None = Field(
+        default=None,
+        description="The final user prompt sent to the agent for this case.",
+    )
+    full_prompt: str | None = Field(
+        default=None,
+        description="System prompt plus user_message as seen by the agent LLM.",
+    )
+    trajectory: str | None = Field(
+        default=None,
+        description="Raw LangGraph transcript (system + tool messages) for this case.",
+    )
+    retrieved_context: str | None = Field(
+        default=None,
+        description="Semantic-layer snippets retrieved before prompt construction.",
+    )
+    thread_id: str | None = Field(
+        default=None,
+        description="Agent thread id, which can be used to replay the full trajectory.",
+    )
+    error: str | None = None
+    created_at: datetime
+
+
+class EvalRunSummary(BaseModel):
+    """Summary of an evaluation run."""
+
+    run_id: str
+    dataset: str
+    dataset_path: str
+    status: str
+    total: int
+    processed: int
+    passed: int
+    errored: int
+    metrics: dict[str, Any]
+    error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class EvalRunDetail(EvalRunSummary):
+    """Full evaluation run with all case results."""
+
+    results: list[EvalCaseResult]
+
+
 class HealthResponse(BaseModel):
     status: Literal["ok", "degraded"]
     llm_provider: str
     checkpointer: str
     hitl: bool
-    mcp: MCPServerStatus = Field(default_factory=MCPServerStatus)
+    mcp: MCPServerStatus = Field(
+        default_factory=MCPServerStatus,
+        description="Legacy single-server MCP status (kept for backwards compatibility).",
+    )
+    servers: dict[str, MCPServerStatus] = Field(
+        default_factory=dict,
+        description="Per-MCP-server status map (starrocks, dosi, ...).",
+    )
 
 
 __all__ = [
@@ -100,5 +259,18 @@ __all__ = [
     "ToolApprovalResume",
     "ThreadCreateResponse",
     "ThreadHistory",
+    "MCPServerStatus",
+    "ReviewRequest",
+    "ReviewComparison",
+    "ReviewResponse",
+    "ReviewSummary",
+    "EvalDataset",
+    "EvalDatasetCase",
+    "EvalDatasetDetail",
+    "EvalRunRequest",
+    "EvalMetricScore",
+    "EvalCaseResult",
+    "EvalRunSummary",
+    "EvalRunDetail",
     "HealthResponse",
 ]

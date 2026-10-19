@@ -14,12 +14,21 @@ import logging
 from langchain_core.tools import BaseTool
 
 from app.tools.calculator import calculator
+from app.tools.data_query import execute_metric_dsl, execute_sql
+from app.tools.semantic_layer import get_semantic_context
 from app.tools.datetime_tool import get_current_time
 from app.tools.file_reader import read_file
 from app.tools.knowledge_search import knowledge_search
 from app.tools.web_search import web_search
 
 logger = logging.getLogger(__name__)
+
+# Names of tools that should only be called by code, not exposed to the LLM.
+_PROGRAM_ONLY_TOOL_NAMES: set[str] = {
+    "generate_sql",
+    "starrocks_read_query",
+    "dosi_run_query",  # DoSI 只负责生成 SQL，执行统一走 execute_sql
+}
 
 # Built-in tools that ship with the application.
 BUILTIN_TOOLS: list[BaseTool] = [
@@ -28,6 +37,9 @@ BUILTIN_TOOLS: list[BaseTool] = [
     web_search,
     knowledge_search,
     read_file,
+    get_semantic_context,
+    execute_metric_dsl,
+    execute_sql,
     # Register additional built-in tools here.
 ]
 
@@ -61,6 +73,22 @@ def get_all_tools() -> list[BaseTool]:
     return [*BUILTIN_TOOLS, *mcp]
 
 
+def get_llm_tools() -> list[BaseTool]:
+    """Return only tools that should be visible to the Agent LLM.
+
+    SQL generation and execution are program-driven, so ``generate_sql`` and
+    ``starrocks_read_query`` are filtered out.
+    """
+    return [
+        t for t in get_all_tools() if t.name not in _PROGRAM_ONLY_TOOL_NAMES
+    ]
+
+
+def get_program_only_tool_names() -> set[str]:
+    """Return the set of tool names reserved for program-driven execution."""
+    return set(_PROGRAM_ONLY_TOOL_NAMES)
+
+
 # Backwards-compatible alias used by callers that expect a bare list.
 ALL_TOOLS = BUILTIN_TOOLS
 
@@ -71,6 +99,7 @@ __all__ = [
     "get_all_tools",
     "get_builtin_tools",
     "get_mcp_tools",
+    "get_llm_tools",
     "get_current_time",
     "calculator",
     "web_search",

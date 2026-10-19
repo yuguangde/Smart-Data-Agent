@@ -7,19 +7,22 @@ Run via::
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
-from typing import Any
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.agent.graph import get_compiled_graph
 from app.api import api_router
-from app.config import get_settings
-from app.memory.checkpointer import shutdown_checkpointer
-from app.tools.mcp_loader import init_mcp_tools, shutdown_mcp
+from app.api.chat import health as chat_health
+from app.api.schemas import HealthResponse
+from app.bootstrap import bootstrap_agent, shutdown_agent
+from app.config import CheckpointerKind, get_settings
+from app.memory.eval_store import init_eval_store
+from app.memory.review_store import init_review_store
+from app.memory.summary_store import init_summary_store
+from app.tasks.summarizer import start_summarizer_task
 
 logger = logging.getLogger(__name__)
 
@@ -41,27 +44,58 @@ async def lifespan(app: FastAPI):
         settings.hitl,
     )
 
-    # MCP is best-effort: any failure is logged and we fall back to built-in tools.
-    loaded_mcp_tools: list[Any] = []
-    try:
-        loaded_mcp_tools = await init_mcp_tools()
-        if loaded_mcp_tools:
-            logger.info("Loaded %d MCP tool(s)", len(loaded_mcp_tools))
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("MCP initialisation failed during startup: %s", exc)
+    # Bootstrap the agent: checkpointer, MCP tools (DoSI/StarRocks), and compile
+    # the graph with the freshly-loaded toolset.
+    await bootstrap_agent()
 
-    # Defensive: the graph may have been warmed during module import (before MCP
-    # tools were loaded). Clear the cache so the server process always compiles
-    # with the freshly-loaded toolset.
-    get_compiled_graph.cache_clear()
-    get_compiled_graph()
+    # Initialize optional summary store for SQLite-backed deployments.
+    await init_summary_store()
+
+    # Initialize optional review store for SQLite-backed deployments.
+    await init_review_store()
+
+    # Initialize optional evaluation store for SQLite-backed deployments.
+    await init_eval_store()
+
+    # Warm the vector-backed semantic index.  Heavy work (embedding + Chroma
+    # writes) is delegated to a worker thread so startup stays responsive.
+    semantic_index = None
+    if settings.vector_store_enabled:
+        # Import lazily here to avoid a circular import at module-load time:
+        # app.agent.graph -> app.tools -> app.services -> app.agent.graph.
+        from app.services.semantic_index import KNOWLEDGE_DIR, get_semantic_index
+        try:
+            semantic_index = get_semantic_index()
+            await asyncio.to_thread(
+                semantic_index.ensure_indexed_knowledge_dir, KNOWLEDGE_DIR
+            )
+            logger.info(
+                "Vector semantic index ready (%s)",
+                settings.embedding_model,
+            )
+        except Exception as exc:
+            logger.warning("Vector semantic index warmup failed: %s", exc)
+
+    # Start background task that periodically summarizes stale conversations.
+    summarizer_task: asyncio.Task[None] | None = None
+    if settings.checkpointer == CheckpointerKind.SQLITE:
+        summarizer_task = await start_summarizer_task()
 
     try:
         yield
     finally:
-        await shutdown_mcp()
-        with shutdown_checkpointer():
-            pass
+        if summarizer_task is not None:
+            summarizer_task.cancel()
+            try:
+                await summarizer_task
+            except asyncio.CancelledError:
+                pass
+        if semantic_index is not None:
+            try:
+                semantic_index.close()
+            except Exception:
+                pass
+        await shutdown_agent()
 
 
 def create_app() -> FastAPI:
@@ -85,6 +119,11 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(api_router)
+
+    @app.get("/health", response_model=HealthResponse, tags=["health"])
+    async def health() -> HealthResponse:
+        """Root-level health probe; delegates to the canonical /api/health implementation."""
+        return await chat_health()
 
     @app.get("/", include_in_schema=False)
     async def root() -> JSONResponse:

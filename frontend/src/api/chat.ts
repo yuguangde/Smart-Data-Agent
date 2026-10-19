@@ -8,10 +8,14 @@
  *   GET  /threads/{id}       -> { thread_id, messages: [...] }
  */
 import type {
+  ReviewRequestBody,
+  ReviewResponsePayload,
   SendMessageBody,
   StreamEvent,
+  ThreadContextSizeResponse,
   ThreadCreateResponse,
   ThreadHistoryResponse,
+  ThreadSummaryResponse,
 } from "@/types/chat";
 
 /** Resolved at build time via Vite (`VITE_API_BASE`). Defaults to `/api`. */
@@ -43,6 +47,26 @@ export async function fetchHistory(
     `${API_BASE}/threads/${encodeURIComponent(threadId)}`,
   );
   return parseJson<ThreadHistoryResponse>(res);
+}
+
+/** Fetch approximate context-size statistics for a thread. */
+export async function getThreadContextSize(
+  threadId: string,
+): Promise<ThreadContextSizeResponse> {
+  const res = await fetch(
+    `${API_BASE}/threads/${encodeURIComponent(threadId)}/context-size`,
+  );
+  return parseJson<ThreadContextSizeResponse>(res);
+}
+
+/** Fetch the persisted summary for a thread, if one exists. */
+export async function getThreadSummary(
+  threadId: string,
+): Promise<ThreadSummaryResponse> {
+  const res = await fetch(
+    `${API_BASE}/threads/${encodeURIComponent(threadId)}/summary`,
+  );
+  return parseJson<ThreadSummaryResponse>(res);
 }
 
 /** Cancellable handle returned by {@link sendChatStream}. */
@@ -118,6 +142,93 @@ export function sendChatStream(
         }
       }
       // Drain any trailing frame that didn't end with a blank line.
+      if (buffer.trim().length > 0) {
+        const parsed = parseSSEBlock(buffer);
+        if (parsed) onEvent(parsed);
+      }
+      onEvent({ event: "end", data: null });
+    } catch (err) {
+      if ((err as { name?: string }).name === "AbortError") return;
+      onError?.(err instanceof Error ? err : new Error(String(err)));
+    }
+  })();
+
+  return {
+    promise,
+    cancel: () => controller.abort(),
+  };
+}
+
+/**
+ * Fetch the most recent stored review for a thread.
+ * Returns null if no review exists (404).
+ */
+export async function fetchLatestReview(
+  threadId: string,
+): Promise<ReviewResponsePayload | null> {
+  const res = await fetch(
+    `${API_BASE}/threads/${encodeURIComponent(threadId)}/reviews/latest`,
+  );
+  if (res.status === 404) {
+    return null;
+  }
+  return parseJson<ReviewResponsePayload>(res);
+}
+
+/**
+ * Stream a review request. The wire format is identical to chat streaming,
+ * but event names are prefixed with `review_`.
+ */
+export function sendReviewStream(
+  body: ReviewRequestBody,
+  onEvent: (ev: StreamEvent<unknown>) => void,
+  onError?: (err: Error) => void,
+): ChatStreamHandle {
+  const controller = new AbortController();
+
+  const promise = (async () => {
+    let res: Response;
+    try {
+      res = await fetch(`${API_BASE}/review/stream`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if ((err as { name?: string }).name === "AbortError") return;
+      onError?.(err instanceof Error ? err : new Error(String(err)));
+      return;
+    }
+
+    if (!res.ok || !res.body) {
+      const text = await res.text().catch(() => "");
+      onError?.(new Error(`review stream failed: ${res.status} ${text}`));
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let sep = buffer.indexOf("\n\n");
+        while (sep !== -1) {
+          const rawBlock = buffer.slice(0, sep);
+          buffer = buffer.slice(sep + 2);
+          const parsed = parseSSEBlock(rawBlock);
+          if (parsed) onEvent(parsed);
+          sep = buffer.indexOf("\n\n");
+        }
+      }
       if (buffer.trim().length > 0) {
         const parsed = parseSSEBlock(buffer);
         if (parsed) onEvent(parsed);

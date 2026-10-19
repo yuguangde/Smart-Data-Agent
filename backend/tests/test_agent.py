@@ -54,5 +54,7 @@ async def test_health_endpoint() -> None:
     resp = client.get("/health")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["status"] == "ok"
+    assert body["status"] in ("ok", "degraded")
+    assert "servers" in body
+    assert "mcp" in body
     assert "llm_provider" in body

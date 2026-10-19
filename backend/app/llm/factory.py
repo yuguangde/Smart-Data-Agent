@@ -25,6 +25,35 @@ def get_llm(settings: Settings | None = None, *, with_tools: list["BaseTool"] | 
     return chat
 
 
+def _review_settings(settings: Settings) -> Settings:
+    """Return a Settings object that uses the review LLM configuration."""
+    return settings.model_construct(
+        llm_provider=settings.review_llm_provider,
+        openai_api_key=settings.review_openai_api_key,
+        openai_model=settings.review_openai_model,
+        openai_base_url=settings.review_openai_base_url,
+        openai_temperature=settings.review_openai_temperature,
+        anthropic_api_key=settings.review_anthropic_api_key,
+        anthropic_model=settings.review_anthropic_model,
+        deepseek_api_key=settings.review_deepseek_api_key,
+        deepseek_base_url=settings.review_deepseek_base_url,
+        deepseek_model=settings.review_deepseek_model,
+        qwen_api_key=settings.review_qwen_api_key,
+        qwen_base_url=settings.review_qwen_base_url,
+        qwen_model=settings.review_qwen_model,
+        max_tokens=settings.review_max_tokens,
+    )
+
+
+def get_review_llm(settings: Settings | None = None) -> BaseChatModel:
+    """Build the review-agent chat model (no tools by default)."""
+    settings = settings or get_settings()
+    if not settings.review_enabled:
+        raise RuntimeError("Review agent is disabled (REVIEW_ENABLED=false)")
+    review_settings = _review_settings(settings)
+    return _build_chat_model(review_settings)
+
+
 def _build_chat_model(settings: Settings) -> BaseChatModel:
     provider = settings.llm_provider
     logger.info("Building LLM: provider=%s", provider)

@@ -1,0 +1,108 @@
+/**
+ * HTTP client for evaluation APIs.
+ */
+import type {
+  EvalCaseResult,
+  EvalDataset,
+  EvalDatasetDetail,
+  EvalRunDetail,
+  EvalRunRequest,
+  EvalRunSummary,
+} from "@/types/eval";
+
+const API_BASE =
+  (import.meta.env?.VITE_API_BASE as string | undefined) || "/api";
+
+async function parseJson<T>(res: Response): Promise<T> {
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `API ${res.status} ${res.statusText}: ${body.slice(0, 200)}`,
+    );
+  }
+  return (await res.json()) as T;
+}
+
+/** List available JSONL evaluation datasets. */
+export async function fetchEvalDatasets(): Promise<EvalDataset[]> {
+  const res = await fetch(`${API_BASE}/eval/datasets`);
+  return parseJson<EvalDataset[]>(res);
+}
+
+/** Get detailed information for a single dataset, including its cases. */
+export async function fetchEvalDataset(
+  datasetName: string,
+): Promise<EvalDatasetDetail> {
+  const res = await fetch(
+    `${API_BASE}/eval/datasets/${encodeURIComponent(datasetName)}`,
+  );
+  return parseJson<EvalDatasetDetail>(res);
+}
+
+/** Start an evaluation run for a dataset. */
+export async function startEvalRun(
+  body: EvalRunRequest,
+): Promise<EvalRunSummary> {
+  const res = await fetch(`${API_BASE}/eval/runs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return parseJson<EvalRunSummary>(res);
+}
+
+/** List evaluation runs, optionally filtered by dataset name. */
+export async function fetchEvalRuns(
+  dataset?: string,
+): Promise<EvalRunSummary[]> {
+  const url = new URL(`${API_BASE}/eval/runs`, window.location.origin);
+  if (dataset) {
+    url.searchParams.set("dataset", dataset);
+  }
+  const res = await fetch(url.toString());
+  return parseJson<EvalRunSummary[]>(res);
+}
+
+/** Get a single evaluation run with case results. */
+export async function fetchEvalRun(runId: string): Promise<EvalRunDetail> {
+  const res = await fetch(
+    `${API_BASE}/eval/runs/${encodeURIComponent(runId)}`,
+  );
+  return parseJson<EvalRunDetail>(res);
+}
+
+/** Get a single case result by id. */
+export async function fetchEvalResult(resultId: string): Promise<EvalCaseResult> {
+  const res = await fetch(
+    `${API_BASE}/eval/results/${encodeURIComponent(resultId)}`,
+  );
+  return parseJson<EvalCaseResult>(res);
+}
+
+/** Remove a case from a dataset by its 1-based index. */
+export async function deleteEvalCase(
+  datasetName: string,
+  caseIndex: number,
+): Promise<EvalDatasetDetail> {
+  const res = await fetch(
+    `${API_BASE}/eval/datasets/${encodeURIComponent(datasetName)}/cases/${caseIndex}`,
+    { method: "DELETE" },
+  );
+  return parseJson<EvalDatasetDetail>(res);
+}
+
+/** Append a new case to a dataset. */
+export async function addEvalCase(
+  datasetName: string,
+  caseObj: Record<string, unknown>,
+): Promise<EvalDatasetDetail> {
+  const res = await fetch(
+    `${API_BASE}/eval/datasets/${encodeURIComponent(datasetName)}/cases`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ case: caseObj }),
+    },
+  );
+  return parseJson<EvalDatasetDetail>(res);
+}

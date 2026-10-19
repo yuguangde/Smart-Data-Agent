@@ -57,7 +57,7 @@ class _CsvFriendlySourceMixin:
     """
 
     def prepare_field_value(self, field_name, field, field_value, value_is_complex):
-        if field_name == "mcp_allowed_tools" and isinstance(field_value, str):
+        if field_name in ("mcp_allowed_tools", "dosi_ossie_files") and isinstance(field_value, str):
             return field_value
         return super().prepare_field_value(
             field_name, field, field_value, value_is_complex
@@ -113,15 +113,122 @@ class Settings(BaseSettings):
 
     max_tokens: int = Field(default=2048)
     max_iterations: int = Field(default=8)
+    summary_interval_seconds: int = Field(
+        default=3600,
+        description="Interval between background conversation summarization tasks.",
+    )
+
+    # -------- Review Agent (secondary LLM for cross-checking reports) --------
+    review_enabled: bool = Field(
+        default=False,
+        description="Master switch for the review-agent cross-check feature.",
+    )
+    review_llm_provider: LLMProvider = Field(default=LLMProvider.ANTHROPIC)
+
+    review_openai_api_key: str = Field(default="")
+    review_openai_model: str = Field(default="")
+    review_openai_base_url: str = Field(default="")
+    review_openai_temperature: float = Field(default=0.7)
+
+    review_anthropic_api_key: str = Field(default="")
+    review_anthropic_model: str = Field(default="claude-sonnet-4-5")
+
+    review_deepseek_api_key: str = Field(default="")
+    review_deepseek_base_url: str = Field(default="https://api.deepseek.com")
+    review_deepseek_model: str = Field(default="deepseek-chat")
+
+    review_qwen_api_key: str = Field(default="")
+    review_qwen_base_url: str = Field(
+        default="https://dashscope.aliyuncs.com/compatible-mode/v1"
+    )
+    review_qwen_model: str = Field(default="qwen-plus")
+
+    review_max_tokens: int = Field(default=4096)
+    review_max_iterations: int = Field(default=8)
+
+    # -------- Evaluation --------
+    eval_enabled: bool = Field(
+        default=True,
+        description="Master switch for the evaluation API and store.",
+    )
+    eval_datasets_dir: str = Field(
+        default=str(BASE_DIR / "evaluation" / "datasets"),
+        description="Directory containing JSONL evaluation datasets.",
+    )
+    eval_retrieval_enabled: bool = Field(
+        default=False,
+        description="Enable semantic-layer retrieval before BIRD-SQL evaluation.",
+    )
+    eval_retrieval_top_k: int = Field(
+        default=5,
+        description="Number of semantic-layer snippets to retrieve for each BIRD case.",
+    )
+
+    # -------- Evaluation StarRocks target --------
+    # When set, BIRD-SQL evaluation executes gold/generated SQL against this
+    # StarRocks database instead of the SQLite db_path shipped with the dataset.
+    eval_starrocks_host: str = Field(default="127.0.0.1")
+    eval_starrocks_port: int = Field(default=9030)
+    eval_starrocks_user: str = Field(default="root")
+    eval_starrocks_password: str = Field(default="")
+    eval_starrocks_database: str = Field(default="")
+
+    # -------- Vector Store / Semantic Retrieval --------
+    vector_store_enabled: bool = Field(
+        default=True,
+        description="Enable ChromaDB-backed vector search for knowledge retrieval.",
+    )
+    vector_store_path: str = Field(
+        default=str(BASE_DIR / "data" / "chroma"),
+        description="Directory for ChromaDB persistent storage.",
+    )
+    embedding_model: str = Field(
+        default="sentence-transformers/all-MiniLM-L6-v2",
+        description="Sentence-transformers model name used to encode knowledge snippets.",
+    )
+    embedding_device: str = Field(
+        default="cpu",
+        description="Device passed to sentence-transformers (cpu / cuda / mps).",
+    )
+    embedding_local_cache_dir: str = Field(
+        default=str(BASE_DIR / "data" / "models"),
+        description="Local cache directory for downloaded embedding models.",
+    )
+    knowledge_search_mode: Literal["vector", "token"] = Field(
+        default="vector",
+        description="Retrieval backend for the knowledge_search tool.",
+    )
+    knowledge_max_chars: int = Field(
+        default=4000,
+        description="Total character budget for retrieved knowledge context.",
+    )
+    knowledge_snippet_max_chars: int = Field(
+        default=1500,
+        description="Maximum characters for a single retrieved knowledge snippet.",
+    )
 
     # -------- Memory --------
     checkpointer: CheckpointerKind = Field(default=CheckpointerKind.MEMORY)
     sqlite_path: str = Field(default=str(BASE_DIR / "data" / "chat.db"))
 
+    @property
+    def eval_datasets_dir_resolved(self) -> Path:
+        """Return the absolute Path of the evaluation datasets directory."""
+        path = Path(self.eval_datasets_dir)
+        if not path.is_absolute():
+            path = BASE_DIR / path
+        return path.resolve()
+
+
     # -------- Behavior --------
     hitl: bool = Field(
         default=False,
-        description="Enable Human-in-the-Loop interrupt before agent node.",
+        description="Enable Human-in-the-Loop SQL review before executing generated SQL.",
+    )
+
+    query_sql_dialect: str = Field(
+        default="ansi",
+        description="Target SQL dialect for metric query rendering. One of: ansi, trino, spark, hive.",
     )
 
     # -------- MCP (Model Context Protocol) servers --------
@@ -187,6 +294,89 @@ class Settings(BaseSettings):
             "Empty disables auth (acceptable for trusted local MCP servers)."
         ),
     )
+    mcp_chart_allowed_roots: str = Field(
+        default="",
+        description=(
+            "Comma-separated list of extra filesystem roots allowed for chart proxying. "
+            "If empty, only tempfile.gettempdir() is allowed."
+        ),
+    )
+
+    # -------- DoSI (Dosi) semantic-layer SQL engine --------
+    # DoSI compiles Apache Ossie YAML into warehouse-specific SQL and exposes
+    # the capability through an MCP server. When enabled, the agent will prefer
+    # DoSI tools for metric-style questions and fall back to execute_sql when
+    # DoSI cannot compile the request.
+    dosi_mcp_enabled: bool = Field(
+        default=False,
+        description="Master switch for the DoSI MCP-backed semantic SQL engine.",
+    )
+    dosi_mcp_url: str = Field(
+        default="",
+        description="Base URL of the DoSI MCP server (streamable_http / sse transport).",
+    )
+    dosi_mcp_transport: MCPTransport = Field(
+        default=MCPTransport.STREAMABLE_HTTP,
+        description="Transport protocol used by DoSI MCP server.",
+    )
+    dosi_server_name: str = Field(
+        default="dosi",
+        description="Logical server label for the DoSI MCP server.",
+    )
+    dosi_tool_prefix: str = Field(
+        default="dosi_",
+        description=(
+            "Prefix prepended to DoSI MCP tool names. "
+            "Set to '' (empty) to disable prefixing."
+        ),
+    )
+    dosi_allowed_tools: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Whitelist of DoSI MCP tool names to expose. "
+            "Empty means expose all DoSI tools."
+        ),
+    )
+    dosi_model_path: str = Field(
+        default=str(BASE_DIR / "data" / "dosi-model.yaml"),
+        description=(
+            "Path to the combined Apache Ossie model file used by DoSI. "
+            "Generated automatically from backend/ossie/*.ossie.yml at startup."
+        ),
+    )
+    dosi_start_server: bool = Field(
+        default=True,
+        description=(
+            "When true and dosi_mcp_enabled is true, the backend will try to "
+            "start a local dosi-server subprocess on startup. "
+            "Set to false if you run dosi-server outside the backend process."
+        ),
+    )
+    dosi_server_listen_host: str = Field(
+        default="127.0.0.1",
+        description="Host for the embedded DoSI server to listen on.",
+    )
+    dosi_server_listen_port: int = Field(
+        default=8080,
+        description="Port for the embedded DoSI server to listen on.",
+    )
+    dosi_server_bin: str = Field(
+        default="dosi-server",
+        description="Path or name of the dosi-server executable.",
+    )
+    dosi_query_timeout_seconds: float = Field(
+        default=60.0,
+        description="Timeout for DoSI MCP tool calls.",
+    )
+    dosi_ossie_files: list[str] = Field(
+        default_factory=lambda: ["*.ossie.yml"],
+        description=(
+            "Glob patterns selecting which OSSIE files under backend/ossie/ are "
+            "included when building the combined DoSI model. Use a comma-separated "
+            "list (or JSON list). Set to e.g. 'debit_card_specializing.ossie.yml' "
+            "if other files use DoSI-unsupported extensions."
+        ),
+    )
 
     # -------- LangSmith --------
     langsmith_tracing: bool = Field(default=False)
@@ -211,14 +401,14 @@ class Settings(BaseSettings):
             file_secret_settings,
         )
 
-    @field_validator("mcp_allowed_tools", mode="before")
+    @field_validator("mcp_allowed_tools", "dosi_ossie_files", mode="before")
     @classmethod
-    def _split_allowed_tools_csv(cls, v):
+    def _split_csv_list(cls, v):
         """Accept both JSON lists and plain CSV strings from .env.
 
-        Without this, ``MCP_ALLOWED_TOOLS=read_query,table_overview`` would
-        raise a pydantic validation error because BaseSettings tries to JSON-
-        decode list values.
+        Without this, ``MCP_ALLOWED_TOOLS=read_query,table_overview`` or
+        ``DOSI_OSSIE_FILES=*.ossie.yml,a.ossie.yml`` would raise a pydantic
+        validation error because BaseSettings tries to JSON-decode list values.
         """
         if isinstance(v, str):
             stripped = v.strip()
@@ -241,6 +431,17 @@ class Settings(BaseSettings):
             )
         return v
 
+    @field_validator("query_sql_dialect", mode="before")
+    @classmethod
+    def _validate_query_sql_dialect(cls, v: str) -> str:
+        allowed = {"ansi", "trino", "spark", "hive"}
+        normalized = str(v).strip().lower()
+        if normalized not in allowed:
+            raise ValueError(
+                f"query_sql_dialect must be one of {sorted(allowed)}, got {v!r}"
+            )
+        return normalized
+
     @property
     def sqlite_path_resolved(self) -> Path:
         path = Path(self.sqlite_path)
@@ -248,6 +449,33 @@ class Settings(BaseSettings):
             path = BASE_DIR / path
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
+
+    @property
+    def vector_store_path_resolved(self) -> Path:
+        path = Path(self.vector_store_path)
+        if not path.is_absolute():
+            path = BASE_DIR / path
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @property
+    def embedding_cache_dir_resolved(self) -> Path:
+        path = Path(self.embedding_local_cache_dir)
+        if not path.is_absolute():
+            path = BASE_DIR / path
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @field_validator("knowledge_search_mode", mode="before")
+    @classmethod
+    def _validate_knowledge_search_mode(cls, v: str) -> str:
+        allowed = {"vector", "token"}
+        normalized = str(v).strip().lower()
+        if normalized not in allowed:
+            raise ValueError(
+                f"knowledge_search_mode must be one of {sorted(allowed)}, got {v!r}"
+            )
+        return normalized
 
 
 @lru_cache

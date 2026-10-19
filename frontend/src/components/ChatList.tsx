@@ -6,26 +6,32 @@
  * final assistant bubble.
  */
 import {
-  CodeOutlined,
+  CheckCircleOutlined,
+  LoadingOutlined,
   RobotOutlined,
-  ToolOutlined,
   UserOutlined,
 } from "@ant-design/icons";
 import { Bubble } from "@ant-design/x";
-import { Avatar, Card, Empty, Space, Tag, Typography } from "antd";
-import { useEffect, useRef } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { Avatar, Button, Card, Empty, Space, Typography } from "antd";
+import { useEffect, useRef, useState } from "react";
 import type { ChatMessage, ToolCall } from "@/types/chat";
+import { ReviewButton } from "./ReviewButton";
+import {
+  ChartIframe,
+  ChartMarkdown,
+  extractChartProxyUrl,
+} from "./ChartRenderer";
 
 const { Text } = Typography;
 
 interface Props {
   messages: ChatMessage[];
   loading: boolean;
+  threadId?: string | null;
+  onReview?: (threadId: string) => void;
 }
 
-export function ChatList({ messages, loading }: Props) {
+export function ChatList({ messages, loading, threadId, onReview }: Props) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   // Auto-scroll to the latest message whenever the list or its content
@@ -60,12 +66,13 @@ export function ChatList({ messages, loading }: Props) {
     <div className="chat-scroll" ref={scrollRef}>
       <Bubble.List
         style={{ padding: 16 }}
-        items={messages.map((m) => ({
-          content: m.content,
-          role: m.role === "user" ? "user" : "assistant",
-          loading: m.streaming && !m.content,
-          avatar:
-            m.role === "user" ? (
+        items={messages.map((m) => {
+          const isUser = m.role === "user" || m.role === "human";
+          return {
+            content: m.content,
+            role: isUser ? "user" : "assistant",
+            loading: m.streaming && !m.content,
+            avatar: isUser ? (
               <Avatar icon={<UserOutlined />} />
             ) : (
               <Avatar
@@ -73,13 +80,19 @@ export function ChatList({ messages, loading }: Props) {
                 style={{ backgroundColor: "#1677ff" }}
               />
             ),
-          // `Bubble.List` types vary; keep the raw message for nested render.
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          ...({ meta: m } as any),
-          messageRender: (content: string) => (
-            <MessageBubble content={content} message={m} />
-          ),
-        }))}
+            // `Bubble.List` types vary; keep the raw message for nested render.
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            ...({ meta: m } as any),
+            messageRender: (content: string) => (
+              <MessageBubble
+                content={content}
+                message={m}
+                threadId={threadId}
+                onReview={onReview}
+              />
+            ),
+          };
+        })}
       />
     </div>
   );
@@ -91,17 +104,25 @@ export function ChatList({ messages, loading }: Props) {
 function MessageBubble({
   content,
   message,
+  threadId,
+  onReview,
 }: {
   content: string;
   message: ChatMessage;
+  threadId?: string | null;
+  onReview?: (threadId: string) => void;
 }) {
+  const isAssistant = message.role === "assistant" || message.role === "ai";
+  const showReview =
+    isAssistant && !message.streaming && message.content && threadId && onReview;
+
   return (
     <div className="bubble-body">
       <div
         className="markdown-body"
         style={{ marginBottom: message.toolCalls?.length ? 8 : 0 }}
       >
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+        <ChartMarkdown content={content} />
         {message.streaming ? <span className="caret" /> : null}
       </div>
 
@@ -112,45 +133,99 @@ function MessageBubble({
           ))}
         </Space>
       ) : null}
+
+      {showReview ? (
+        <div style={{ marginTop: 8 }}>
+          <ReviewButton
+            threadId={threadId}
+            disabled={message.streaming}
+            onReview={onReview}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }
 
 function ToolCallCard({ tc }: { tc: ToolCall }) {
+  const [expanded, setExpanded] = useState(false);
+  const finished = !!tc.output;
+
   return (
     <Card
       size="small"
       className="tool-call-card"
-      title={
-        <Space size={6}>
-          {tc.output ? (
-            <Tag color="green">已完成</Tag>
-          ) : (
-            <Tag color="processing">调用中</Tag>
-          )}
-          <CodeOutlined />
-          <Text strong>{tc.name}</Text>
-        </Space>
-      }
-      extra={<ToolOutlined />}
+      styles={{ body: { padding: "8px 12px" } }}
     >
-      {tc.input ? (
-        <details open>
-          <summary style={{ cursor: "pointer", color: "#1677ff" }}>
-            输入参数
-          </summary>
-          <pre className="tool-call-pre">
-            {JSON.stringify(tc.input, null, 2)}
-          </pre>
-        </details>
-      ) : null}
-      {tc.output ? (
-        <details open style={{ marginTop: tc.input ? 8 : 0 }}>
-          <summary style={{ cursor: "pointer", color: "#1677ff" }}>
-            输出结果
-          </summary>
-          <pre className="tool-call-pre">{tc.output}</pre>
-        </details>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          minHeight: 24,
+        }}
+      >
+        {finished ? (
+          <CheckCircleOutlined
+            style={{ color: "#52c41a", fontSize: 16 }}
+          />
+        ) : (
+          <LoadingOutlined style={{ color: "#1677ff", fontSize: 16 }} />
+        )}
+        <Text
+          strong
+          style={{
+            flex: 1,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {tc.name}
+        </Text>
+        <Text type="secondary" style={{ fontSize: 12, flexShrink: 0 }}>
+          {finished ? "已完成" : "调用中..."}
+        </Text>
+        <Button
+          type="link"
+          size="small"
+          style={{ padding: 0, fontSize: 12, flexShrink: 0 }}
+          onClick={() => setExpanded((v) => !v)}
+        >
+          {expanded ? "收起" : "详情"}
+        </Button>
+      </div>
+
+      {expanded && (tc.input || tc.output) ? (
+        <div style={{ marginTop: 8 }}>
+          {tc.input ? (
+            <div style={{ marginBottom: 8 }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                输入参数
+              </Text>
+              <pre className="tool-call-pre">
+                {JSON.stringify(tc.input, null, 2)}
+              </pre>
+            </div>
+          ) : null}
+          {tc.output ? (
+            <div>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                输出结果
+              </Text>
+              {(() => {
+                const chartUrl = extractChartProxyUrl(tc.output);
+                return chartUrl ? (
+                  <div style={{ marginTop: 4 }}>
+                    <ChartIframe src={chartUrl} />
+                  </div>
+                ) : (
+                  <pre className="tool-call-pre">{tc.output}</pre>
+                );
+              })()}
+            </div>
+          ) : null}
+        </div>
       ) : null}
     </Card>
   );
